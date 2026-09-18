@@ -13,6 +13,10 @@ import sys
 
 sys.path.append(os.getcwd())
 
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv()
+
 from app.core.db import SessionLocal  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.users.service import create_user, get_user_by_email  # noqa: E402
