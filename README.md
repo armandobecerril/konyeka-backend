@@ -39,7 +39,7 @@ alembic upgrade head
 python -m scripts.seed_admin
 
 # 6. Levantar la API
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8010
 ```
 
 La API queda en `http://localhost:8000` (docs interactivas en `/docs`).
