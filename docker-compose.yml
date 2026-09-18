@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: konyeka-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: konyeka
+      POSTGRES_PASSWORD: konyeka
+      POSTGRES_DB: konyeka
+    ports:
+      - "5432:5432"
+    volumes:
+      - konyeka_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U konyeka -d konyeka"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  konyeka_pgdata:
