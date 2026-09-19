@@ -36,12 +36,21 @@ def solicitar_descarga(
     fecha_final: date,
     tipo_comprobante: str | None,
 ) -> dict:
-    """Crea la solicitud de descarga en el SAT. Regresa un dict con IdSolicitud/CodEstatus/Mensaje."""
+    """Crea la solicitud de descarga en el SAT. Regresa un dict con IdSolicitud/CodEstatus/Mensaje.
+
+    Desde la versión 1.5 del webservice (mayo 2025), el SAT exige indicar
+    EstadoComprobante explícitamente: si se omite, responde con el error 301
+    "XML mal formado". Por ahora solo pedimos comprobantes Vigentes (la
+    cancelación/conciliación queda para un sprint futuro).
+    """
+    from satcfdi.pacs.sat import EstadoComprobante
+
     sat = _sat(signer)
     kwargs = dict(
         fecha_inicial=fecha_inicial,
         fecha_final=fecha_final,
         tipo_comprobante=tipo_comprobante,
+        estado_comprobante=EstadoComprobante.VIGENTE,
     )
     if tipo == "emitidas":
         return sat.recover_comprobante_emitted_request(**kwargs)
