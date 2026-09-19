@@ -274,8 +274,16 @@ def _procesar_paquete(
 
 
 def _texto(value) -> str | None:
+    """Convierte un valor de satcfdi a texto plano para guardar en BD.
+
+    Los campos de catálogo (TipoDeComprobante, Moneda, MetodoPago, FormaPago,
+    UsoCFDI) vienen como objetos `Code` de satcfdi, cuyo __str__ regresa
+    "{codigo} - {descripcion}" (ej. "I - Ingreso"). Para esos casos guardamos
+    solo el código bare (`.code`), no la descripción."""
     if value is None:
         return None
+    if hasattr(value, "code"):
+        return str(value.code)
     return str(value)
 
 

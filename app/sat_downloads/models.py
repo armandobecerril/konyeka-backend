@@ -28,7 +28,7 @@ class SolicitudDescarga(Base):
     tipo: Mapped[str] = mapped_column(String(10), nullable=False)  # "emitidas" | "recibidas"
     fecha_inicial: Mapped[date] = mapped_column(Date, nullable=False)
     fecha_final: Mapped[date] = mapped_column(Date, nullable=False)
-    tipo_comprobante: Mapped[str | None] = mapped_column(String(1), nullable=True)  # I/E/N/P/T
+    tipo_comprobante: Mapped[str | None] = mapped_column(String(10), nullable=True)  # I/E/N/P/T
 
     estado: Mapped[str] = mapped_column(String(20), nullable=False, default="solicitada")
     id_solicitud_sat: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -55,7 +55,7 @@ class CfdiDocument(Base):
 
     uuid: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     tipo: Mapped[str] = mapped_column(String(10), nullable=False)  # "emitido" | "recibido"
-    tipo_comprobante: Mapped[str | None] = mapped_column(String(1), nullable=True)
+    tipo_comprobante: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     emisor_rfc: Mapped[str] = mapped_column(String(13), nullable=False)
     emisor_nombre: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -65,10 +65,10 @@ class CfdiDocument(Base):
     fecha_emision: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     subtotal: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
-    moneda: Mapped[str | None] = mapped_column(String(5), nullable=True)
-    metodo_pago: Mapped[str | None] = mapped_column(String(5), nullable=True)
-    forma_pago: Mapped[str | None] = mapped_column(String(5), nullable=True)
-    uso_cfdi: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    moneda: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    metodo_pago: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    forma_pago: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    uso_cfdi: Mapped[str | None] = mapped_column(String(10), nullable=True)
     estado_sat: Mapped[str] = mapped_column(String(20), nullable=False, default="vigente")
 
     storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
