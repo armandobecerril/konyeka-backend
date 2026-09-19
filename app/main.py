@@ -4,7 +4,9 @@ from pydantic import BaseModel
 
 from app.accounts.router import router as accounts_router
 from app.core.config import settings
+from app.efirma.router import router as efirma_router
 from app.rfc_clients.router import router as rfc_clients_router
+from app.sat_downloads.router import router as sat_downloads_router
 from app.sat_portal_ciec.router import router as sat_portal_router
 from app.sat_xml import simulate_sat_xml_download
 from app.users.router import router as users_router
@@ -13,10 +15,10 @@ from app.vault import get_origin_account_vault
 app = FastAPI(
     title="KONYEKA Backend",
     description=(
-        "API de KONYEKA: autenticación y catálogo de clientes real, "
-        "más los conectores SAT (portal, vault y descarga XML) todavía simulados."
+        "API de KONYEKA: autenticación, catálogo de clientes, bóveda de e.firma "
+        "y descarga masiva real de CFDIs del SAT."
     ),
-    version="0.2.0",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -30,6 +32,8 @@ app.add_middleware(
 app.include_router(accounts_router)
 app.include_router(users_router)
 app.include_router(rfc_clients_router)
+app.include_router(efirma_router)
+app.include_router(sat_downloads_router)
 app.include_router(sat_portal_router)
 
 
