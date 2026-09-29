@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.accounts.router import router as accounts_router
+from app.conciliacion.router import router as conciliacion_router
 from app.core.config import settings
 from app.efirma.router import router as efirma_router
 from app.rfc_clients.router import router as rfc_clients_router
@@ -34,6 +35,7 @@ app.include_router(users_router)
 app.include_router(rfc_clients_router)
 app.include_router(efirma_router)
 app.include_router(sat_downloads_router)
+app.include_router(conciliacion_router)
 app.include_router(sat_portal_router)
 
 

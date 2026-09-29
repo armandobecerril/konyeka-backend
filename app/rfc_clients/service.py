@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.rfc_clients.models import RfcClient
@@ -21,6 +21,12 @@ def list_clients(
         like = f"%{q.strip()}%"
         query = query.filter(or_(RfcClient.rfc.ilike(like), RfcClient.razon_social.ilike(like)))
     return query.order_by(RfcClient.razon_social.asc()).offset(skip).limit(limit).all()
+
+
+def contar_clientes_activos(db: Session) -> int:
+    """Total de clientes activos en el catálogo. Alimenta la tarjeta
+    'Clientes activos' del dashboard de inicio."""
+    return db.query(func.count(RfcClient.id)).filter(RfcClient.activo.is_(True)).scalar() or 0
 
 
 def get_client(db: Session, client_id: int) -> RfcClient:

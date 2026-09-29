@@ -6,6 +6,10 @@ from pydantic import BaseModel, field_validator
 TIPOS_SOLICITUD = ("emitidas", "recibidas")
 
 
+class CfdisResumenOut(BaseModel):
+    total_xml: int
+
+
 class SolicitudCreate(BaseModel):
     tipo: str
     fecha_inicial: date

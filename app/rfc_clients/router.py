@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.deps import get_current_user
 from app.rfc_clients import service
-from app.rfc_clients.schemas import RfcClientCreate, RfcClientOut, RfcClientUpdate
+from app.rfc_clients.schemas import ClientesResumenOut, RfcClientCreate, RfcClientOut, RfcClientUpdate
 from app.users.models import User
 
 router = APIRouter(prefix="/clientes", tags=["Catálogo de Clientes"])
@@ -29,6 +29,14 @@ def crear(
     current_user: User = Depends(get_current_user),
 ):
     return service.create_client(db, payload, created_by_id=current_user.id)
+
+
+@router.get("/resumen", response_model=ClientesResumenOut)
+def resumen(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return ClientesResumenOut(total_activos=service.contar_clientes_activos(db))
 
 
 @router.get("/{client_id}", response_model=RfcClientOut)

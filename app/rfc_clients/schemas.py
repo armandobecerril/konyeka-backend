@@ -10,6 +10,10 @@ def infer_tipo_persona(rfc: str) -> str:
     return "moral" if len(rfc) == 12 else "fisica"
 
 
+class ClientesResumenOut(BaseModel):
+    total_activos: int
+
+
 class RfcClientBase(BaseModel):
     rfc: str
     razon_social: str
