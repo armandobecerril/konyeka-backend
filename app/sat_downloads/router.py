@@ -7,7 +7,7 @@ from app.core.db import get_db
 from app.core.deps import get_current_user
 from app.rfc_clients.service import get_client
 from app.sat_downloads import service
-from app.sat_downloads.schemas import CfdiListOut, SolicitudCreate, SolicitudOut
+from app.sat_downloads.schemas import CfdisResumenOut, CfdiListOut, SolicitudCreate, SolicitudOut
 from app.users.models import User
 
 router = APIRouter(tags=["Descarga SAT"])
@@ -55,6 +55,16 @@ def obtener_solicitud(
     current_user: User = Depends(get_current_user),
 ):
     return service.get_solicitud_or_404(db, rfc_client_id, solicitud_id)
+
+
+@router.get("/cfdis/resumen", response_model=CfdisResumenOut)
+def resumen_cfdis_global(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Total de XMLs descargados en la bóveda, sumando todos los clientes.
+    Alimenta la tarjeta 'XML descargados' del dashboard de inicio."""
+    return CfdisResumenOut(total_xml=service.contar_cfdis_totales(db))
 
 
 @router.get("/clientes/{rfc_client_id}/cfdis", response_model=CfdiListOut)

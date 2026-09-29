@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.conciliacion.models import ConciliacionSugerencia, PagoRelacionado
@@ -81,36 +82,32 @@ def _extraer_pagos_de_cfdi(cfdi) -> list[dict]:
 
 def guardar_pagos_relacionados(db: Session, cfdi_document: CfdiDocument, cfdi) -> int:
     """Extrae y guarda los DoctoRelacionado de un CFDI de pago (P) ya indexado.
-    Es idempotente: si ya existían, no los duplica."""
+    Es idempotente y seguro ante llamadas concurrentes: usa INSERT ... ON
+    CONFLICT DO NOTHING (en vez de revisar-y-luego-insertar) porque el
+    resumen, las facturas y los huérfanos se piden en paralelo desde el
+    frontend y más de una petición puede disparar el backfill al mismo
+    tiempo sobre el mismo CFDI."""
     filas = _extraer_pagos_de_cfdi(cfdi)
     if not filas:
         return 0
 
-    existentes = {
-        (r.uuid_factura_relacionada, r.num_parcialidad)
-        for r in db.query(PagoRelacionado.uuid_factura_relacionada, PagoRelacionado.num_parcialidad)
-        .filter(PagoRelacionado.cfdi_pago_id == cfdi_document.id)
-        .all()
-    }
+    valores = [
+        {
+            "rfc_client_id": cfdi_document.rfc_client_id,
+            "cfdi_pago_id": cfdi_document.id,
+            "uuid_pago": cfdi_document.uuid,
+            **fila,
+        }
+        for fila in filas
+    ]
 
-    guardados = 0
-    for fila in filas:
-        clave = (fila["uuid_factura_relacionada"], fila["num_parcialidad"])
-        if clave in existentes:
-            continue
-        db.add(
-            PagoRelacionado(
-                rfc_client_id=cfdi_document.rfc_client_id,
-                cfdi_pago_id=cfdi_document.id,
-                uuid_pago=cfdi_document.uuid,
-                **fila,
-            )
-        )
-        guardados += 1
-
-    if guardados:
-        db.commit()
-    return guardados
+    stmt = pg_insert(PagoRelacionado).values(valores)
+    stmt = stmt.on_conflict_do_nothing(
+        index_elements=["cfdi_pago_id", "uuid_factura_relacionada", "num_parcialidad"]
+    )
+    resultado = db.execute(stmt)
+    db.commit()
+    return resultado.rowcount or 0
 
 
 def backfill_pagos_relacionados(db: Session, rfc_client_id: int) -> int:

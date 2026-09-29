@@ -8,7 +8,7 @@ from decimal import Decimal
 from io import BytesIO
 
 from fastapi import BackgroundTasks, HTTPException, status
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
@@ -345,6 +345,11 @@ def listar_cfdis(
     total = query.count()
     items = query.order_by(CfdiDocument.fecha_emision.desc()).offset(skip).limit(limit).all()
     return items, total
+
+
+def contar_cfdis_totales(db: Session) -> int:
+    """Total de CFDIs descargados en la bóveda, sumando todos los clientes."""
+    return db.query(func.count(CfdiDocument.id)).scalar() or 0
 
 
 def get_cfdi_xml(db: Session, rfc_client_id: int, cfdi_id: int) -> tuple[CfdiDocument, bytes]:
