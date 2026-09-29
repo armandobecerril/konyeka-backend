@@ -215,6 +215,7 @@ def _procesar_paquete(
     rfc_client = db.query(RfcClient).filter(RfcClient.id == rfc_client_id).first()
     storage = get_xml_storage()
     guardados = 0
+    pagos_por_procesar: list[tuple[CfdiDocument, object]] = []
 
     with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
         for nombre in zf.namelist():
@@ -269,7 +270,17 @@ def _procesar_paquete(
             db.add(doc)
             guardados += 1
 
+            if doc.tipo_comprobante == "P":
+                pagos_por_procesar.append((doc, cfdi))
+
     db.commit()
+
+    if pagos_por_procesar:
+        from app.conciliacion.service import guardar_pagos_relacionados
+
+        for doc, cfdi in pagos_por_procesar:
+            guardar_pagos_relacionados(db, doc, cfdi)
+
     return guardados
 
 
