@@ -20,6 +20,25 @@ class ResumenMonedasOut(BaseModel):
     monedas: list[MonedaConteo]
 
 
+class ResumenTotalesOut(BaseModel):
+    """Resumen tipo 'Totales' de MyAdmin: cuenta e importe por tipo de
+    comprobante y por método de pago, sobre todas las facturas descargadas
+    del cliente (no solo la página actual)."""
+
+    ingresos_count: int
+    ingresos_total: Decimal
+    egresos_count: int
+    egresos_total: Decimal
+    traslados_count: int
+    traslados_total: Decimal
+    ppd_count: int
+    ppd_total: Decimal
+    pue_count: int
+    pue_total: Decimal
+    xml_count: int
+    xml_total: Decimal
+
+
 class SolicitudCreate(BaseModel):
     tipo: str
     fecha_inicial: date

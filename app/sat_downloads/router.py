@@ -12,6 +12,7 @@ from app.sat_downloads.schemas import (
     CfdisResumenOut,
     MonedaConteo,
     ResumenMonedasOut,
+    ResumenTotalesOut,
     SolicitudCreate,
     SolicitudOut,
 )
@@ -89,6 +90,19 @@ def resumen_monedas_cliente(
         total_no_mxn=total_no_mxn,
         monedas=[MonedaConteo(moneda=moneda, cantidad=cantidad) for moneda, cantidad in desglose],
     )
+
+
+@router.get("/clientes/{rfc_client_id}/cfdis/resumen-totales", response_model=ResumenTotalesOut)
+def resumen_totales_cliente(
+    rfc_client_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Totales por tipo de comprobante y método de pago, sobre todas las
+    facturas descargadas del cliente. Alimenta la barra de resumen tipo
+    MyAdmin sobre 'Tus facturas descargadas'."""
+    get_client(db, rfc_client_id)
+    return ResumenTotalesOut(**service.resumen_totales(db, rfc_client_id))
 
 
 @router.get("/clientes/{rfc_client_id}/cfdis", response_model=CfdiListOut)

@@ -352,6 +352,42 @@ def contar_cfdis_totales(db: Session) -> int:
     return db.query(func.count(CfdiDocument.id)).scalar() or 0
 
 
+def resumen_totales(db: Session, rfc_client_id: int) -> dict:
+    """Cuenta e importe por tipo de comprobante y por método de pago, sobre
+    todas las facturas descargadas del cliente. Alimenta la barra de
+    'Totales' sobre Tus facturas descargadas, al estilo MyAdmin."""
+    base = db.query(CfdiDocument).filter(CfdiDocument.rfc_client_id == rfc_client_id)
+
+    def contar_y_sumar(filtro=None) -> tuple[int, Decimal]:
+        query = base.filter(filtro) if filtro is not None else base
+        fila = query.with_entities(
+            func.count(CfdiDocument.id), func.coalesce(func.sum(CfdiDocument.total), 0)
+        ).one()
+        return fila[0], Decimal(fila[1])
+
+    ingresos_count, ingresos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "I")
+    egresos_count, egresos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "E")
+    traslados_count, traslados_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "T")
+    ppd_count, ppd_total = contar_y_sumar(CfdiDocument.metodo_pago == "PPD")
+    pue_count, pue_total = contar_y_sumar(CfdiDocument.metodo_pago == "PUE")
+    xml_count, xml_total = contar_y_sumar()
+
+    return {
+        "ingresos_count": ingresos_count,
+        "ingresos_total": ingresos_total,
+        "egresos_count": egresos_count,
+        "egresos_total": egresos_total,
+        "traslados_count": traslados_count,
+        "traslados_total": traslados_total,
+        "ppd_count": ppd_count,
+        "ppd_total": ppd_total,
+        "pue_count": pue_count,
+        "pue_total": pue_total,
+        "xml_count": xml_count,
+        "xml_total": xml_total,
+    }
+
+
 def resumen_monedas(db: Session, rfc_client_id: int) -> tuple[int, list[tuple[str, int]]]:
     """Cuenta, para todas las facturas descargadas de un cliente (sin
     paginar), cuántas no están en MXN y el desglose por moneda. Alimenta el
