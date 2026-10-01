@@ -10,6 +10,16 @@ class CfdisResumenOut(BaseModel):
     total_xml: int
 
 
+class MonedaConteo(BaseModel):
+    moneda: str
+    cantidad: int
+
+
+class ResumenMonedasOut(BaseModel):
+    total_no_mxn: int
+    monedas: list[MonedaConteo]
+
+
 class SolicitudCreate(BaseModel):
     tipo: str
     fecha_inicial: date

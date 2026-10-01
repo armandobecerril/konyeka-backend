@@ -352,6 +352,25 @@ def contar_cfdis_totales(db: Session) -> int:
     return db.query(func.count(CfdiDocument.id)).scalar() or 0
 
 
+def resumen_monedas(db: Session, rfc_client_id: int) -> tuple[int, list[tuple[str, int]]]:
+    """Cuenta, para todas las facturas descargadas de un cliente (sin
+    paginar), cuántas no están en MXN y el desglose por moneda. Alimenta el
+    banner de alerta de 'Tus facturas descargadas'."""
+    filas = (
+        db.query(CfdiDocument.moneda, func.count(CfdiDocument.id))
+        .filter(
+            CfdiDocument.rfc_client_id == rfc_client_id,
+            CfdiDocument.moneda.isnot(None),
+            CfdiDocument.moneda != "MXN",
+        )
+        .group_by(CfdiDocument.moneda)
+        .all()
+    )
+    desglose = [(moneda, cantidad) for moneda, cantidad in filas]
+    total_no_mxn = sum(cantidad for _, cantidad in desglose)
+    return total_no_mxn, desglose
+
+
 def get_cfdi_xml(db: Session, rfc_client_id: int, cfdi_id: int) -> tuple[CfdiDocument, bytes]:
     doc = (
         db.query(CfdiDocument)

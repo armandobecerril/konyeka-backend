@@ -7,7 +7,14 @@ from app.core.db import get_db
 from app.core.deps import get_current_user
 from app.rfc_clients.service import get_client
 from app.sat_downloads import service
-from app.sat_downloads.schemas import CfdisResumenOut, CfdiListOut, SolicitudCreate, SolicitudOut
+from app.sat_downloads.schemas import (
+    CfdiListOut,
+    CfdisResumenOut,
+    MonedaConteo,
+    ResumenMonedasOut,
+    SolicitudCreate,
+    SolicitudOut,
+)
 from app.users.models import User
 
 router = APIRouter(tags=["Descarga SAT"])
@@ -65,6 +72,23 @@ def resumen_cfdis_global(
     """Total de XMLs descargados en la bóveda, sumando todos los clientes.
     Alimenta la tarjeta 'XML descargados' del dashboard de inicio."""
     return CfdisResumenOut(total_xml=service.contar_cfdis_totales(db))
+
+
+@router.get("/clientes/{rfc_client_id}/cfdis/resumen-monedas", response_model=ResumenMonedasOut)
+def resumen_monedas_cliente(
+    rfc_client_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Resumen de monedas distintas a MXN entre todas las facturas
+    descargadas del cliente (no solo la página actual). Alimenta el banner
+    de alerta sobre 'Tus facturas descargadas'."""
+    get_client(db, rfc_client_id)
+    total_no_mxn, desglose = service.resumen_monedas(db, rfc_client_id)
+    return ResumenMonedasOut(
+        total_no_mxn=total_no_mxn,
+        monedas=[MonedaConteo(moneda=moneda, cantidad=cantidad) for moneda, cantidad in desglose],
+    )
 
 
 @router.get("/clientes/{rfc_client_id}/cfdis", response_model=CfdiListOut)
