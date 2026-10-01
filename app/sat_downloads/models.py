@@ -71,5 +71,37 @@ class CfdiDocument(Base):
     uso_cfdi: Mapped[str | None] = mapped_column(String(10), nullable=True)
     estado_sat: Mapped[str] = mapped_column(String(20), nullable=False, default="vigente")
 
+    # Datos adicionales del comprobante, para que la bóveda de facturas
+    # pueda mostrar las mismas columnas que un ERP como MyAdmin sin tener
+    # que volver a abrir el XML. El desglose de impuestos por tasa (IVA 8%,
+    # IVA 16%, IEPS, retenciones, etc.) no se guarda como una columna fija
+    # por cada tasa posible —son decenas y casi siempre vienen vacías—, sino
+    # como JSON en `impuestos_desglose`: cada factura trae solo las tasas
+    # que de verdad tiene, y la tabla arma las columnas que correspondan.
+    serie: Mapped[str | None] = mapped_column(String(25), nullable=True)
+    folio: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    version: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    lugar_expedicion: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    exportacion: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    condiciones_pago: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    descuento: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    tipo_cambio: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    total_impuestos_trasladados: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    total_impuestos_retenidos: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    regimen_fiscal_emisor: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    regimen_fiscal_receptor: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    domicilio_fiscal_receptor: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Desglose de impuestos tal cual viene en el nodo <Impuestos> del XML:
+    # {"traslados": [{"impuesto","tipo_factor","tasa_o_cuota","importe"}, ...],
+    #  "retenciones": [...]}
+    impuestos_desglose: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Nombres de los complementos presentes en el XML (TimbreFiscalDigital,
+    # Pagos, Nomina12, EstadoDeCuentaDeCombustibles, etc.), para el filtro
+    # "Leer complementos" de la bóveda.
+    complementos: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    tiene_complemento_combustible: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false", index=True
+    )
+
     storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

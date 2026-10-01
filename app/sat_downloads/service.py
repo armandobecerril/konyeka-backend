@@ -200,6 +200,22 @@ def _tipo_documento(tipo_solicitud: str) -> str:
     return "emitido" if tipo_solicitud == "emitidas" else "recibido"
 
 
+# Los dos complementos del SAT que identifican compras de combustible (lo que
+# los contadores llaman, en corto, "facturas de gasolina"): el que emiten las
+# gasolineras por consumo directo, y el que emiten los monederos electrónicos
+# de flotillas (Edenred, Multisistemas, etc). Empezamos solo con estos dos —
+# el resto del catálogo de complementos del SAT se agrega más adelante.
+COMPLEMENTOS_COMBUSTIBLE = {"consumodecombustibles", "estadodecuentacombustible"}
+
+
+def _tiene_complemento_combustible(xml_bytes: bytes, lista_complementos: list[str]) -> bool:
+    if any(nombre.lower() in COMPLEMENTOS_COMBUSTIBLE for nombre in lista_complementos):
+        return True
+    # Respaldo por si satcfdi no reconoce el namespace exacto del complemento:
+    # buscamos directo el nombre de la etiqueta raíz en el XML crudo.
+    return b"ConsumoDeCombustibles" in xml_bytes or b"EstadoDeCuentaCombustible" in xml_bytes
+
+
 def _procesar_paquete(
     db: Session,
     *,
@@ -246,6 +262,9 @@ def _procesar_paquete(
             )
 
             receptor = cfdi.get("Receptor") or {}
+            impuestos = cfdi.get("Impuestos") or {}
+            complemento = cfdi.get("Complemento") or {}
+            lista_complementos = list(complemento.keys())
 
             doc = CfdiDocument(
                 rfc_client_id=rfc_client_id,
@@ -253,10 +272,21 @@ def _procesar_paquete(
                 uuid=uuid,
                 tipo=_tipo_documento(tipo),
                 tipo_comprobante=_texto(cfdi.get("TipoDeComprobante")),
+                serie=_texto(cfdi.get("Serie")),
+                folio=_texto(cfdi.get("Folio")),
+                version=_texto(cfdi.get("Version")),
+                lugar_expedicion=_texto(cfdi.get("LugarExpedicion")),
+                exportacion=_texto(cfdi.get("Exportacion")),
+                condiciones_pago=_texto(cfdi.get("CondicionesDePago")),
+                descuento=_to_decimal(cfdi.get("Descuento")),
+                tipo_cambio=_to_decimal(cfdi.get("TipoCambio")),
                 emisor_rfc=_texto(cfdi["Emisor"]["Rfc"]),
                 emisor_nombre=_texto(cfdi["Emisor"].get("Nombre")),
+                regimen_fiscal_emisor=_texto(cfdi["Emisor"].get("RegimenFiscal")),
                 receptor_rfc=_texto(cfdi["Receptor"]["Rfc"]),
                 receptor_nombre=_texto(cfdi["Receptor"].get("Nombre")),
+                regimen_fiscal_receptor=_texto(receptor.get("RegimenFiscalReceptor")),
+                domicilio_fiscal_receptor=_texto(receptor.get("DomicilioFiscalReceptor")),
                 fecha_emision=_to_datetime(cfdi.get("Fecha")),
                 total=_to_decimal(cfdi.get("Total")) or Decimal("0"),
                 subtotal=_to_decimal(cfdi.get("SubTotal")),
@@ -264,6 +294,11 @@ def _procesar_paquete(
                 metodo_pago=_texto(cfdi.get("MetodoPago")),
                 forma_pago=_texto(cfdi.get("FormaPago")),
                 uso_cfdi=_texto(receptor.get("UsoCFDI")),
+                total_impuestos_trasladados=_to_decimal(impuestos.get("TotalImpuestosTrasladados")),
+                total_impuestos_retenidos=_to_decimal(impuestos.get("TotalImpuestosRetenidos")),
+                impuestos_desglose=_serializar_impuestos(impuestos),
+                complementos=lista_complementos or None,
+                tiene_complemento_combustible=_tiene_complemento_combustible(xml_bytes, lista_complementos),
                 estado_sat="vigente",
                 storage_path=storage_path,
             )
@@ -298,6 +333,38 @@ def _texto(value) -> str | None:
     return str(value)
 
 
+def _serializar_impuestos(impuestos) -> dict | None:
+    """Convierte el bloque <Impuestos> del comprobante a un dict JSON-serializable
+    con el desglose completo por tasa/cuota.
+
+    satcfdi regresa Traslados y Retenciones como DICTS (no listas), con llaves
+    compuestas tipo "002|Tasa|0.160000" para traslados o el código del impuesto
+    ("001") para retenciones -- verificado directo contra la librería con un
+    CFDI de prueba. Guardamos solo los valores (la llave compuesta no aporta
+    nada que no esté ya en el propio valor)."""
+    if not impuestos:
+        return None
+
+    def _valor(v) -> dict:
+        return {
+            "impuesto": _texto(v.get("Impuesto")),
+            "tipo_factor": _texto(v.get("TipoFactor")),
+            "tasa_o_cuota": str(v["TasaOCuota"]) if v.get("TasaOCuota") is not None else None,
+            "base": str(v["Base"]) if v.get("Base") is not None else None,
+            "importe": str(v["Importe"]) if v.get("Importe") is not None else None,
+        }
+
+    traslados = impuestos.get("Traslados") or {}
+    retenciones = impuestos.get("Retenciones") or {}
+    desglose = {
+        "traslados": [_valor(v) for v in traslados.values()],
+        "retenciones": [_valor(v) for v in retenciones.values()],
+    }
+    if not desglose["traslados"] and not desglose["retenciones"]:
+        return None
+    return desglose
+
+
 def _to_datetime(value) -> datetime:
     if isinstance(value, datetime):
         return value
@@ -320,6 +387,7 @@ def listar_cfdis(
     fecha_desde: date | None = None,
     fecha_hasta: date | None = None,
     q: str | None = None,
+    complemento: str | None = None,
     skip: int = 0,
     limit: int = 100,
 ):
@@ -330,6 +398,8 @@ def listar_cfdis(
         query = query.filter(CfdiDocument.fecha_emision >= fecha_desde)
     if fecha_hasta:
         query = query.filter(CfdiDocument.fecha_emision <= fecha_hasta)
+    if complemento == "gasolinas":
+        query = query.filter(CfdiDocument.tiene_complemento_combustible.is_(True))
     if q:
         like = f"%{q.strip()}%"
         query = query.filter(

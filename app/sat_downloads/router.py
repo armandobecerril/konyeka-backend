@@ -112,6 +112,9 @@ def listar_cfdis(
     fecha_desde: date | None = Query(default=None),
     fecha_hasta: date | None = Query(default=None),
     q: str | None = Query(default=None, description="Busca por UUID, RFC o nombre"),
+    complemento: str | None = Query(
+        default=None, description="Filtra por complemento SAT. Por ahora solo 'gasolinas'."
+    ),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -124,6 +127,7 @@ def listar_cfdis(
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
         q=q,
+        complemento=complemento,
         skip=skip,
         limit=limit,
     )

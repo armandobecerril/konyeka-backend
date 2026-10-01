@@ -112,3 +112,14 @@ class RfcClientOut(RfcClientBase):
     id: int
     tipo_persona: str
     activo: bool
+
+
+class ConstanciaExtraidaOut(BaseModel):
+    """Lo que se pudo leer de un PDF de Constancia de Situación Fiscal del
+    SAT, para precargar el formulario de alta de cliente. Cualquier campo
+    puede venir en None si no se pudo leer con certeza — el usuario lo
+    captura a mano en ese caso."""
+
+    rfc: str | None = None
+    razon_social: str | None = None
+    regimen_fiscal: str | None = None

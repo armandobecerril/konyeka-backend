@@ -82,10 +82,21 @@ class CfdiDocumentOut(BaseModel):
     uuid: str
     tipo: str
     tipo_comprobante: str | None
+    serie: str | None
+    folio: str | None
+    version: str | None
+    lugar_expedicion: str | None
+    exportacion: str | None
+    condiciones_pago: str | None
+    descuento: Decimal | None
+    tipo_cambio: Decimal | None
     emisor_rfc: str
     emisor_nombre: str | None
+    regimen_fiscal_emisor: str | None
     receptor_rfc: str
     receptor_nombre: str | None
+    regimen_fiscal_receptor: str | None
+    domicilio_fiscal_receptor: str | None
     fecha_emision: datetime
     total: Decimal
     subtotal: Decimal | None
@@ -93,6 +104,11 @@ class CfdiDocumentOut(BaseModel):
     metodo_pago: str | None
     forma_pago: str | None
     uso_cfdi: str | None
+    total_impuestos_trasladados: Decimal | None
+    total_impuestos_retenidos: Decimal | None
+    impuestos_desglose: dict | None
+    complementos: list[str] | None
+    tiene_complemento_combustible: bool
     estado_sat: str
 
     model_config = {"from_attributes": True}
