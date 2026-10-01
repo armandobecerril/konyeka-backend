@@ -80,14 +80,17 @@ class RfcClientBase(BaseModel):
             raise ValueError("La razón social es obligatoria")
         return value
 
-    @field_validator("regimen_fiscal")
-    @classmethod
-    def validar_regimen_fiscal_base(cls, value: str | None) -> str | None:
-        return validar_regimen_fiscal(value)
-
 
 class RfcClientCreate(RfcClientBase):
-    pass
+    # La validación de régimen fiscal vive SOLO aquí (y en RfcClientUpdate),
+    # nunca en RfcClientBase: si estuviera en la base, también se aplicaría
+    # a RfcClientOut al leer clientes ya guardados, y un cliente con un
+    # régimen no oficial (dato viejo, de antes del catálogo) tronaría el
+    # listado completo con un 500 en vez de solo bloquear el guardado.
+    @field_validator("regimen_fiscal")
+    @classmethod
+    def validar_regimen_fiscal_create(cls, value: str | None) -> str | None:
+        return validar_regimen_fiscal(value)
 
 
 class RfcClientUpdate(BaseModel):
