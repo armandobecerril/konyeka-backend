@@ -33,12 +33,23 @@ class Settings(BaseSettings):
     # trámites, a diferencia de la Descarga Masiva de CFDIs.
     # SAT_RPA_HEADLESS=false sirve para ver el navegador y ajustar selectores en desarrollo.
     SAT_RPA_HEADLESS: bool = True
-    # Servicio externo de resolución de CAPTCHA (API compatible con 2Captcha),
-    # necesario porque el login del portal del SAT lo pide. Sin esta llave,
-    # las descargas de Opinión de Cumplimiento y Constancia fallan con un
-    # mensaje claro en vez de intentar adivinar el CAPTCHA.
+    # Resolución del CAPTCHA del login del portal del SAT. Dos proveedores
+    # intercambiables (CAPTCHA_SOLVER_PROVIDER):
+    #   "2captcha"  -> servicio de terceros compatible con la API de 2Captcha.
+    #   "azure_llm" -> un modelo con visión desplegado en Azure AI Foundry
+    #                  (o cualquier endpoint compatible con Chat Completions
+    #                  de Azure OpenAI), al que se le manda la imagen del
+    #                  CAPTCHA y se le pide el texto. Sirve para CAPTCHAs de
+    #                  texto/números distorsionados simples.
+    CAPTCHA_SOLVER_PROVIDER: str = "2captcha"
+
     CAPTCHA_SOLVER_API_KEY: str = ""
     CAPTCHA_SOLVER_BASE_URL: str = "https://2captcha.com"
+
+    AZURE_LLM_ENDPOINT: str = ""
+    AZURE_LLM_API_KEY: str = ""
+    AZURE_LLM_DEPLOYMENT: str = ""
+    AZURE_LLM_API_VERSION: str = "2024-06-01"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

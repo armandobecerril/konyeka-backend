@@ -1,10 +1,18 @@
-"""Cliente mínimo para un servicio externo de resolución de CAPTCHA, compatible
-con la API de 2Captcha (in.php / res.php) -- varios proveedores (2Captcha,
-Anti-Captcha vía su modo de compatibilidad, CapSolver, etc.) la implementan,
-así que basta con cambiar CAPTCHA_SOLVER_BASE_URL para usar otro.
+"""Resuelve el CAPTCHA del login del portal del SAT (con e.firma o CIEC),
+necesario porque no hay forma confiable de resolverlo nosotros mismos sin un
+modelo o servicio externo. Dos proveedores intercambiables, elegidos con
+CAPTCHA_SOLVER_PROVIDER -- ver app/core/config.py:
 
-Es necesario porque el login del portal del SAT (con e.firma o CIEC) pide
-resolver un CAPTCHA, y no hay forma confiable de resolverlo nosotros mismos."""
+    "2captcha"  -- servicio de terceros compatible con la API de 2Captcha
+                   (in.php / res.php): un humano o modelo propio del
+                   proveedor resuelve la imagen.
+    "azure_llm" -- un modelo con visión desplegado en Azure AI Foundry (o
+                   cualquier endpoint compatible con Chat Completions de
+                   Azure OpenAI): se le manda la imagen del CAPTCHA en base64
+                   y se le pide que responda solo con el texto. Sirve para
+                   CAPTCHAs de texto/números distorsionados simples; si el
+                   SAT usara un CAPTCHA de otro tipo (basado en clics o
+                   comportamiento, tipo reCAPTCHA v2/v3), esto no aplicaría."""
 import base64
 import logging
 import time
@@ -18,19 +26,29 @@ logger = logging.getLogger(__name__)
 
 class CaptchaSolverError(Exception):
     """Error al resolver el CAPTCHA -- se le muestra tal cual al usuario,
-    normalmente porque falta configurar CAPTCHA_SOLVER_API_KEY o el proveedor
-    no pudo leer la imagen."""
+    normalmente porque falta configurar el proveedor elegido."""
 
 
-def resolver_captcha_imagen(imagen_bytes: bytes, *, intentos_max: int = 24, espera_segundos: int = 5) -> str:
-    """Envía la imagen del CAPTCHA al servicio externo y espera el texto
-    resuelto. Bloqueante -- se llama desde dentro del RPA (que ya corre en un
-    background task), nunca directo en el ciclo request/response."""
+def resolver_captcha_imagen(imagen_bytes: bytes) -> str:
+    """Envía la imagen del CAPTCHA al proveedor configurado y regresa el
+    texto resuelto. Bloqueante -- se llama desde dentro del RPA (que ya corre
+    en un background task), nunca directo en el ciclo request/response."""
+    proveedor = settings.CAPTCHA_SOLVER_PROVIDER.lower()
+    if proveedor == "azure_llm":
+        return _resolver_con_azure_llm(imagen_bytes)
+    if proveedor == "2captcha":
+        return _resolver_con_2captcha(imagen_bytes)
+    raise CaptchaSolverError(
+        f"CAPTCHA_SOLVER_PROVIDER='{settings.CAPTCHA_SOLVER_PROVIDER}' no es válido "
+        "(usa '2captcha' o 'azure_llm')."
+    )
+
+
+def _resolver_con_2captcha(imagen_bytes: bytes, *, intentos_max: int = 24, espera_segundos: int = 5) -> str:
     if not settings.CAPTCHA_SOLVER_API_KEY:
         raise CaptchaSolverError(
-            "No hay configurado un servicio de resolución de CAPTCHA "
-            "(variable de entorno CAPTCHA_SOLVER_API_KEY). Sin esto no se puede "
-            "pasar el login del portal del SAT."
+            "No hay configurada una llave de 2Captcha (CAPTCHA_SOLVER_API_KEY). "
+            "Sin esto no se puede pasar el login del portal del SAT."
         )
 
     base_url = settings.CAPTCHA_SOLVER_BASE_URL.rstrip("/")
@@ -49,7 +67,7 @@ def resolver_captcha_imagen(imagen_bytes: bytes, *, intentos_max: int = 24, espe
         envio.raise_for_status()
         datos = envio.json()
         if datos.get("status") != 1:
-            raise CaptchaSolverError(f"El servicio de CAPTCHA rechazó la imagen: {datos.get('request')}")
+            raise CaptchaSolverError(f"2Captcha rechazó la imagen: {datos.get('request')}")
         captcha_id = datos["request"]
 
         for _ in range(intentos_max):
@@ -68,8 +86,55 @@ def resolver_captcha_imagen(imagen_bytes: bytes, *, intentos_max: int = 24, espe
             if datos.get("status") == 1:
                 return datos["request"]
             if datos.get("request") != "CAPCHA_NOT_READY":
-                raise CaptchaSolverError(
-                    f"El servicio de CAPTCHA no pudo resolver la imagen: {datos.get('request')}"
-                )
+                raise CaptchaSolverError(f"2Captcha no pudo resolver la imagen: {datos.get('request')}")
 
-    raise CaptchaSolverError("El servicio de CAPTCHA tardó demasiado en responder.")
+    raise CaptchaSolverError("2Captcha tardó demasiado en responder.")
+
+
+def _resolver_con_azure_llm(imagen_bytes: bytes) -> str:
+    if not (settings.AZURE_LLM_ENDPOINT and settings.AZURE_LLM_API_KEY and settings.AZURE_LLM_DEPLOYMENT):
+        raise CaptchaSolverError(
+            "Falta configurar el modelo de Azure AI Foundry para resolver el CAPTCHA "
+            "(AZURE_LLM_ENDPOINT, AZURE_LLM_API_KEY, AZURE_LLM_DEPLOYMENT)."
+        )
+
+    imagen_b64 = base64.b64encode(imagen_bytes).decode()
+    url = (
+        f"{settings.AZURE_LLM_ENDPOINT.rstrip('/')}/openai/deployments/"
+        f"{settings.AZURE_LLM_DEPLOYMENT}/chat/completions"
+        f"?api-version={settings.AZURE_LLM_API_VERSION}"
+    )
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Esta imagen es un CAPTCHA de texto. Responde ÚNICAMENTE con "
+                            "los caracteres que aparecen en la imagen, sin explicaciones, "
+                            "espacios ni puntuación adicional."
+                        ),
+                    },
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{imagen_b64}"}},
+                ],
+            }
+        ],
+        "max_tokens": 20,
+        "temperature": 0,
+    }
+
+    with httpx.Client(timeout=30) as client:
+        respuesta = client.post(url, json=payload, headers={"api-key": settings.AZURE_LLM_API_KEY})
+        respuesta.raise_for_status()
+        datos = respuesta.json()
+
+    try:
+        texto = datos["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, AttributeError):
+        raise CaptchaSolverError("El modelo de Azure AI Foundry no regresó una respuesta utilizable para el CAPTCHA.")
+
+    if not texto:
+        raise CaptchaSolverError("El modelo de Azure AI Foundry regresó una respuesta vacía para el CAPTCHA.")
+    return texto
