@@ -175,9 +175,31 @@ def _iniciar_sesion_efirma(
             )
 
 
-def _descargar_pdf_actual(page: Page, selector_boton_descarga: str) -> bytes:
+def _buscar_en_cualquier_frame(page: Page, texto: str):
+    """Busca `texto` primero en el frame principal y, si no aparece ahí, en
+    cada iframe de la página. Confirmado con un screenshot real (ver
+    _guardar_diagnostico): el trámite de Constancia (y probablemente el de
+    Opinión, mismo portal) se carga dentro de un iframe -- la URL de entrada
+    es literalmente un "lanzador.jsf" (launcher) que monta el contenido real
+    del trámite en un frame hijo bajo el shell del Buzón Tributario. Un
+    page.click()/page.get_by_text() sobre el frame principal nunca encuentra
+    esos botones aunque se vean perfectamente en un screenshot, porque un
+    screenshot pinta los pixeles de todos los frames pero page.locator()
+    solo busca en el documento principal."""
+    principal = page.get_by_text(texto, exact=False)
+    if principal.count() > 0:
+        return principal
+    for frame in page.frames:
+        candidato = frame.get_by_text(texto, exact=False)
+        if candidato.count() > 0:
+            return candidato
+    return principal  # vacío a propósito: que el error de arriba lo reporte
+
+
+def _descargar_pdf_actual(page: Page, texto_boton_descarga: str) -> bytes:
+    boton = _buscar_en_cualquier_frame(page, texto_boton_descarga)
     with page.expect_download() as descarga_info:
-        page.click(selector_boton_descarga)
+        boton.first.click()
     descarga = descarga_info.value
     ruta = descarga.path()
     if ruta is None:
@@ -224,8 +246,14 @@ def descargar_opinion_cumplimiento(
         # guarda un screenshot del momento exacto (ver _guardar_diagnostico)
         # para no tener que adivinar el selector a ciegas la próxima vez.
         try:
-            page.click("text=Generar Opinión")  # TODO-VERIFICAR
+            _buscar_en_cualquier_frame(page, "Generar Opinión").first.click()  # TODO-VERIFICAR
             page.wait_for_load_state("networkidle")
+            # El click puede recargar solo el iframe del trámite (no el frame
+            # principal), y en ese caso wait_for_load_state("networkidle") del
+            # `page` no necesariamente refleja esa carga interna -- este margen
+            # es una red de seguridad mientras no se confirme el comportamiento
+            # real contra el portal autenticado.
+            page.wait_for_timeout(800)
 
             contenido = page.inner_text("body").lower()
             if "positivo" in contenido:
@@ -238,7 +266,7 @@ def descargar_opinion_cumplimiento(
                     "negativa en la respuesta del SAT; revísala manualmente en el portal."
                 )
 
-            pdf_bytes = _descargar_pdf_actual(page, "text=Descargar PDF")  # TODO-VERIFICAR
+            pdf_bytes = _descargar_pdf_actual(page, "Descargar PDF")  # TODO-VERIFICAR
             return pdf_bytes, resultado
         except SatPortalError:
             raise
@@ -265,10 +293,13 @@ def descargar_constancia_situacion_fiscal(
         # siguiente sigue sin verificar contra el portal real -- igual que
         # en Opinión, si truena se guarda un screenshot del momento exacto.
         try:
-            page.click("text=Generar Constancia")  # TODO-VERIFICAR
+            _buscar_en_cualquier_frame(page, "Generar Constancia").first.click()  # TODO-VERIFICAR
             page.wait_for_load_state("networkidle")
+            # Mismo margen que en Opinión: el click puede recargar solo el
+            # iframe del trámite, no el frame principal.
+            page.wait_for_timeout(800)
 
-            return _descargar_pdf_actual(page, "text=Descargar PDF")  # TODO-VERIFICAR
+            return _descargar_pdf_actual(page, "Descargar PDF")  # TODO-VERIFICAR
         except SatPortalError:
             raise
         except Exception as exc:
