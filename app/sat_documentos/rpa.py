@@ -196,15 +196,68 @@ def _buscar_en_cualquier_frame(page: Page, texto: str):
     return principal  # vacío a propósito: que el error de arriba lo reporte
 
 
-def _descargar_pdf_actual(page: Page, texto_boton_descarga: str) -> bytes:
-    boton = _buscar_en_cualquier_frame(page, texto_boton_descarga)
-    with page.expect_download() as descarga_info:
-        boton.first.click()
-    descarga = descarga_info.value
-    ruta = descarga.path()
-    if ruta is None:
-        raise SatPortalError("El SAT no generó el PDF para descargar. Intenta de nuevo más tarde.")
-    return Path(ruta).read_bytes()
+def _generar_y_descargar_pdf(page: Page, texto_boton_generar: str) -> bytes:
+    """Hace clic en el botón que genera el documento (Generar Opinión /
+    Generar Constancia) y regresa los bytes del PDF resultante.
+
+    El texto oficial del SAT para Constancia dice que el resultado "se
+    muestra en otra ventana del navegador" -- no hay forma de saber de
+    antemano (sin e.firma real para probar) si eso significa (a) el clic
+    dispara una descarga directa en la misma pestaña, (b) se abre una
+    pestaña nueva que ya trae el PDF (como descarga, o mostrado inline por
+    el visor de PDF del navegador), o (c) el clic solo genera el documento y
+    aparece un botón/enlace "Descargar PDF" aparte en la misma pestaña. Se
+    cubren los tres, en ese orden."""
+    boton = _buscar_en_cualquier_frame(page, texto_boton_generar)
+    contexto = page.context
+
+    descargas: list = []
+    pestanas_nuevas: list = []
+    contexto.on("download", descargas.append)
+    contexto.on("page", pestanas_nuevas.append)
+
+    boton.first.click()
+    page.wait_for_timeout(3000)  # dale tiempo a que la descarga/pestaña nueva aparezca
+
+    # (a) Descarga directa (en esta pestaña o en una nueva -- el evento
+    # "download" del contexto se dispara sin importar en cuál pestaña pasó).
+    if descargas:
+        ruta = descargas[-1].path()
+        if ruta is not None:
+            return Path(ruta).read_bytes()
+
+    # (b) Se abrió una pestaña nueva con el resultado, sin disparar un
+    # evento de descarga (p.ej. el navegador muestra el PDF inline). Se baja
+    # por HTTP directo, reusando las cookies ya autenticadas del contexto.
+    if pestanas_nuevas:
+        pestana = pestanas_nuevas[-1]
+        try:
+            pestana.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:  # noqa: BLE001
+            pass
+        if descargas:  # pudo haber llegado tarde
+            ruta = descargas[-1].path()
+            if ruta is not None:
+                return Path(ruta).read_bytes()
+        respuesta = contexto.request.get(pestana.url)
+        if respuesta.ok and "pdf" in respuesta.headers.get("content-type", "").lower():
+            return respuesta.body()
+
+    # (c) Ni descarga ni pestaña nueva -- puede que solo haya aparecido un
+    # botón/enlace "Descargar PDF" aparte en la misma pestaña.
+    boton_descarga = _buscar_en_cualquier_frame(page, "Descargar PDF")
+    if boton_descarga.count() > 0:
+        with page.expect_download(timeout=15000) as descarga_info:
+            boton_descarga.first.click()
+        ruta = descarga_info.value.path()
+        if ruta is not None:
+            return Path(ruta).read_bytes()
+
+    raise SatPortalError(
+        "El SAT no generó el PDF para descargar (no hubo descarga directa, pestaña "
+        "nueva con el documento, ni un botón de descarga visible). Intenta de nuevo "
+        "más tarde."
+    )
 
 
 def _guardar_diagnostico(page: Page, *, rfc: str, tipo: str) -> str:
@@ -213,21 +266,29 @@ def _guardar_diagnostico(page: Page, *, rfc: str, tipo: str) -> str:
     siguiente vez no hace falta adivinar el selector a ciegas, se puede ver tal cual
     qué le mostró el SAT al RPA. No hay riesgo de capturar credenciales: para cuando
     se llega aquí el login ya se intentó, y de cualquier forma los navegadores pintan
-    los campos type="password" como puntos incluso en un screenshot."""
+    los campos type="password" como puntos incluso en un screenshot.
+
+    También reporta las pestañas abiertas en ese momento -- el SAT avisa que el
+    resultado de Generar Opinión/Constancia "se muestra en otra ventana del
+    navegador", así que esto dice de inmediato, sin bajar el screenshot, si se
+    abrió una pestaña nueva y a qué URL."""
+    pestanas = [p.url for p in page.context.pages]
+
     try:
         captura = page.screenshot(full_page=True)
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo tomar el screenshot de diagnóstico")
-        return "(no se pudo capturar el screenshot)"
+        return f"(no se pudo capturar el screenshot; pestañas abiertas: {pestanas})"
 
     nombre = f"debug-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
     try:
-        return get_xml_storage().save_debug(
+        ruta = get_xml_storage().save_debug(
             rfc=rfc, tipo=tipo, nombre=nombre, content=captura, extension="png", content_type="image/png"
         )
+        return f"{ruta} (pestañas abiertas: {pestanas})"
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo guardar el screenshot de diagnóstico")
-        return "(no se pudo guardar el screenshot)"
+        return f"(no se pudo guardar el screenshot; pestañas abiertas: {pestanas})"
 
 
 def descargar_opinion_cumplimiento(
@@ -246,14 +307,14 @@ def descargar_opinion_cumplimiento(
         # guarda un screenshot del momento exacto (ver _guardar_diagnostico)
         # para no tener que adivinar el selector a ciegas la próxima vez.
         try:
-            _buscar_en_cualquier_frame(page, "Generar Opinión").first.click()  # TODO-VERIFICAR
-            page.wait_for_load_state("networkidle")
-            # El click puede recargar solo el iframe del trámite (no el frame
-            # principal), y en ese caso wait_for_load_state("networkidle") del
-            # `page` no necesariamente refleja esa carga interna -- este margen
-            # es una red de seguridad mientras no se confirme el comportamiento
-            # real contra el portal autenticado.
-            page.wait_for_timeout(800)
+            # OJO: a diferencia de Constancia, acá todavía no está confirmado si
+            # el resultado (positivo/negativo) aparece en la misma pestaña antes
+            # de descargar el PDF, o si -- como Constancia -- todo pasa en una
+            # pestaña nueva. _generar_y_descargar_pdf cubre ambos casos para el
+            # PDF; si el resultado positivo/negativo solo aparece en una pestaña
+            # nueva, esta lectura de `contenido` en la pestaña original puede
+            # necesitar ajustarse después de ver el próximo diagnóstico.
+            pdf_bytes = _generar_y_descargar_pdf(page, "Generar Opinión")  # TODO-VERIFICAR
 
             contenido = page.inner_text("body").lower()
             if "positivo" in contenido:
@@ -266,7 +327,6 @@ def descargar_opinion_cumplimiento(
                     "negativa en la respuesta del SAT; revísala manualmente en el portal."
                 )
 
-            pdf_bytes = _descargar_pdf_actual(page, "Descargar PDF")  # TODO-VERIFICAR
             return pdf_bytes, resultado
         except SatPortalError:
             raise
@@ -293,13 +353,7 @@ def descargar_constancia_situacion_fiscal(
         # siguiente sigue sin verificar contra el portal real -- igual que
         # en Opinión, si truena se guarda un screenshot del momento exacto.
         try:
-            _buscar_en_cualquier_frame(page, "Generar Constancia").first.click()  # TODO-VERIFICAR
-            page.wait_for_load_state("networkidle")
-            # Mismo margen que en Opinión: el click puede recargar solo el
-            # iframe del trámite, no el frame principal.
-            page.wait_for_timeout(800)
-
-            return _descargar_pdf_actual(page, "Descargar PDF")  # TODO-VERIFICAR
+            return _generar_y_descargar_pdf(page, "Generar Constancia")  # TODO-VERIFICAR
         except SatPortalError:
             raise
         except Exception as exc:
