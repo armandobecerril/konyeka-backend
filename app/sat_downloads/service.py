@@ -453,6 +453,34 @@ def contar_cfdis_totales(db: Session) -> int:
     return db.query(func.count(CfdiDocument.id)).scalar() or 0
 
 
+def _sumar_pagos_relacionados(db: Session, base, rfc_client_id: int) -> Decimal:
+    """Suma el monto REAL de los pagos -- `imp_pagado` de cada DoctoRelacionado
+    dentro del complemento de pago -- en vez del campo `total` del
+    comprobante, que por especificación del SAT siempre viene en $0 para un
+    CFDI tipo Pago (P): el monto real vive dentro del complemento, no en el
+    encabezado. PagoRelacionado ya guarda esos montos (los usa la
+    conciliación de pagos); backfill_pagos_relacionados() se asegura de que
+    también estén rellenados para CFDIs de pago descargados antes de que
+    existiera esa tabla (es idempotente, seguro de llamar en cada request).
+
+    `base` es la MISMA query ya filtrada (rfc_client_id, rango de fechas,
+    búsqueda, complemento) que usa el resto de resumen_totales(), para que
+    esta suma respete exactamente los mismos filtros que las demás tarjetas
+    y la tabla de abajo."""
+    from app.conciliacion.models import PagoRelacionado
+    from app.conciliacion.service import backfill_pagos_relacionados
+
+    backfill_pagos_relacionados(db, rfc_client_id)
+
+    ids_pagos_filtrados = base.filter(CfdiDocument.tipo_comprobante == "P").with_entities(CfdiDocument.id)
+    total = (
+        db.query(func.coalesce(func.sum(PagoRelacionado.imp_pagado), 0))
+        .filter(PagoRelacionado.cfdi_pago_id.in_(ids_pagos_filtrados))
+        .scalar()
+    )
+    return Decimal(total)
+
+
 def resumen_totales(
     db: Session,
     rfc_client_id: int,
@@ -486,8 +514,19 @@ def resumen_totales(
 
     ingresos_count, ingresos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "I")
     egresos_count, egresos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "E")
+    # Traslados (T): el importe SIEMPRE es $0 por especificación del SAT (un
+    # CFDI de traslado documenta movimiento de mercancía, no una operación
+    # monetaria) -- $0.00 aquí es el valor correcto, no un dato faltante.
     traslados_count, traslados_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "T")
-    pagos_count, pagos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "P")
+    # Pagos (P): igual que Traslados, el campo `total` del comprobante TAMBIÉN es
+    # siempre $0 por especificación del SAT (el monto real vive dentro del
+    # complemento de pago, no en el encabezado), así que sumar `total` aquí
+    # daba siempre $0 sin importar cuántos pagos hubiera -- lo que el
+    # contador reportó como "no se actualiza". El monto real sí se extrae y
+    # se guarda (en PagoRelacionado, para la conciliación de pagos); se
+    # reutiliza esa misma fuente aquí.
+    pagos_count, _ = contar_y_sumar(CfdiDocument.tipo_comprobante == "P")
+    pagos_total = _sumar_pagos_relacionados(db, base, rfc_client_id)
     ppd_count, ppd_total = contar_y_sumar(CfdiDocument.metodo_pago == "PPD")
     pue_count, pue_total = contar_y_sumar(CfdiDocument.metodo_pago == "PUE")
     xml_count, xml_total = contar_y_sumar()
