@@ -47,6 +47,7 @@ al autenticarse, el SAT redirige solo de vuelta al trámite con la sesión ya
 iniciada -- no hace falta (ni es correcto) hacer un segundo page.goto() a una
 URL del trámite después del login."""
 import logging
+import re
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -111,9 +112,13 @@ def _iniciar_sesion_efirma(
         # los campos de archivo. id="buttonFiel" confirmado en ambos
         # trámites (Opinión y Constancia, mismo widget de login). Se deja el
         # texto como respaldo por si el SAT cambia el id en algún despliegue.
-        selector_boton_efirma = "#buttonFiel, text=Acceso con e.firma, text=e.firma"
-        if page.locator(selector_boton_efirma).count() > 0:
-            page.locator(selector_boton_efirma).first.click()
+        boton_efirma = (
+            page.locator("#buttonFiel")
+            .or_(page.get_by_text("Acceso con e.firma"))
+            .or_(page.get_by_text("e.firma", exact=True))
+        )
+        if boton_efirma.count() > 0:
+            boton_efirma.first.click()
             page.wait_for_load_state("networkidle")
 
         # Verificado contra el portal real: estos son los ids reales del
@@ -141,11 +146,14 @@ def _iniciar_sesion_efirma(
         # TODO-VERIFICAR: texto exacto del mensaje de error del SAT cuando
         # rechaza la e.firma (e.firma vencida, contraseña de la llave
         # incorrecta, etc.) -- no se pudo confirmar sin autenticar de verdad.
-        selector_error = (
-            "text=no fue posible autenticar, text=no fue posible iniciar sesión, "
-            "text=no fue posible iniciar la sesión, text=Usuario o contraseña incorrectos"
+        error_login = page.get_by_text(
+            re.compile(
+                r"no fue posible autenticar|no fue posible iniciar( la)? sesi[oó]n|"
+                r"usuario o contrase[ñn]a incorrectos",
+                re.IGNORECASE,
+            )
         )
-        if page.locator(selector_error).count() > 0:
+        if error_login.count() > 0:
             raise SatPortalError(
                 "El SAT rechazó el login con esta e.firma. Verifica que la e.firma "
                 "(no el sello/CSD) esté vigente y que la contraseña de la llave privada "
