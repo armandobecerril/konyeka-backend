@@ -162,3 +162,18 @@ def descargar_xml(
         media_type="application/xml",
         headers={"Content-Disposition": f'attachment; filename="{doc.uuid}.xml"'},
     )
+
+
+@router.get("/clientes/{rfc_client_id}/cfdis/{cfdi_id}/pdf")
+def descargar_pdf(
+    rfc_client_id: int,
+    cfdi_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    doc, content = service.get_cfdi_pdf(db, rfc_client_id, cfdi_id)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{doc.uuid}.pdf"'},
+    )

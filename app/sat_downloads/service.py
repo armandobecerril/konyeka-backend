@@ -541,3 +541,196 @@ def get_cfdi_xml(db: Session, rfc_client_id: int, cfdi_id: int) -> tuple[CfdiDoc
     storage = get_xml_storage()
     content = storage.read(doc.storage_path)
     return doc, content
+
+
+def _conceptos_desde_xml(xml_bytes: bytes) -> list[dict]:
+    """Extrae la lista de Conceptos del XML para mostrarla en el PDF genérico.
+
+    No se guarda en BD (solo se usa el header del CFDI para las columnas de
+    la bóveda), así que aquí se vuelve a parsear el XML bajo demanda -- el
+    PDF se genera una vez por clic, así que el costo es insignificante."""
+    from satcfdi.cfdi import CFDI
+
+    try:
+        cfdi = CFDI.from_string(xml_bytes)
+    except Exception:  # noqa: BLE001
+        return []
+
+    conceptos = cfdi.get("Conceptos") or []
+    filas: list[dict] = []
+    for concepto in conceptos:
+        filas.append(
+            {
+                "cantidad": _texto(concepto.get("Cantidad")) or "",
+                "unidad": _texto(concepto.get("Unidad")) or "",
+                "clave_prod_serv": _texto(concepto.get("ClaveProdServ")) or "",
+                "descripcion": _texto(concepto.get("Descripcion")) or "",
+                "valor_unitario": _to_decimal(concepto.get("ValorUnitario")),
+                "importe": _to_decimal(concepto.get("Importe")),
+            }
+        )
+    return filas
+
+
+def get_cfdi_pdf(db: Session, rfc_client_id: int, cfdi_id: int) -> tuple[CfdiDocument, bytes]:
+    """Genera un PDF genérico tipo factura a partir de los datos ya guardados
+    del CFDI (y sus Conceptos, releídos del XML). No es la representación
+    impresa oficial del SAT (esa requiere la plantilla XSLT certificada):
+    es un resumen legible pensado para que el contador pueda imprimir o
+    compartir la factura sin tener que abrir el XML."""
+    doc, xml_bytes = get_cfdi_xml(db, rfc_client_id, cfdi_id)
+    conceptos = _conceptos_desde_xml(xml_bytes)
+    pdf_bytes = _renderizar_pdf_cfdi(doc, conceptos)
+    return doc, pdf_bytes
+
+
+def _renderizar_pdf_cfdi(doc: CfdiDocument, conceptos: list[dict]) -> bytes:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+
+    def money(valor: Decimal | None) -> str:
+        if valor is None:
+            return "—"
+        moneda = doc.moneda or "MXN"
+        return f"${valor:,.2f} {moneda}"
+
+    styles = getSampleStyleSheet()
+    titulo = ParagraphStyle("titulo", parent=styles["Heading1"], fontSize=16, textColor=colors.HexColor("#061A35"))
+    subtitulo = ParagraphStyle("subtitulo", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#64748B"))
+    etiqueta = ParagraphStyle("etiqueta", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#64748B"))
+    valor_style = ParagraphStyle("valor", parent=styles["Normal"], fontSize=10, textColor=colors.HexColor("#061A35"))
+
+    buffer = BytesIO()
+    pdf = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+        leftMargin=16 * mm,
+        rightMargin=16 * mm,
+        title=f"CFDI {doc.uuid}",
+    )
+
+    elementos = []
+    elementos.append(Paragraph("Comprobante Fiscal Digital (CFDI)", titulo))
+    elementos.append(Paragraph("Representación genérica -- no es el formato oficial timbrado por el SAT.", subtitulo))
+    elementos.append(Spacer(1, 10 * mm))
+
+    datos_generales = [
+        [Paragraph("Emisor", etiqueta), Paragraph("Receptor", etiqueta)],
+        [
+            Paragraph(f"{doc.emisor_nombre or doc.emisor_rfc}<br/>RFC: {doc.emisor_rfc}", valor_style),
+            Paragraph(f"{doc.receptor_nombre or doc.receptor_rfc}<br/>RFC: {doc.receptor_rfc}", valor_style),
+        ],
+    ]
+    tabla_partes = Table(datos_generales, colWidths=[85 * mm, 85 * mm])
+    tabla_partes.setStyle(
+        TableStyle(
+            [
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 1), (-1, 1), 2),
+            ]
+        )
+    )
+    elementos.append(tabla_partes)
+    elementos.append(Spacer(1, 8 * mm))
+
+    folio = " ".join(filter(None, [doc.serie, doc.folio])) or "—"
+    meta_filas = [
+        ["UUID", doc.uuid, "Fecha", doc.fecha_emision.strftime("%d/%m/%Y %H:%M")],
+        ["Serie / Folio", folio, "Tipo", doc.tipo_comprobante or "—"],
+        ["Uso CFDI", doc.uso_cfdi or "—", "Régimen emisor", doc.regimen_fiscal_emisor or "—"],
+        ["Forma de pago", doc.forma_pago or "—", "Método de pago", doc.metodo_pago or "—"],
+        ["Moneda", doc.moneda or "MXN", "Estado SAT", doc.estado_sat],
+    ]
+    tabla_meta = Table(meta_filas, colWidths=[30 * mm, 55 * mm, 30 * mm, 55 * mm])
+    tabla_meta.setStyle(
+        TableStyle(
+            [
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#64748B")),
+                ("TEXTCOLOR", (2, 0), (2, -1), colors.HexColor("#64748B")),
+                ("TEXTCOLOR", (1, 0), (1, -1), colors.HexColor("#061A35")),
+                ("TEXTCOLOR", (3, 0), (3, -1), colors.HexColor("#061A35")),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#E2E8F0")),
+            ]
+        )
+    )
+    elementos.append(tabla_meta)
+    elementos.append(Spacer(1, 8 * mm))
+
+    if conceptos:
+        encabezado = ["Cant.", "Clave", "Descripción", "V. unitario", "Importe"]
+        filas_conceptos = [encabezado]
+        for c in conceptos:
+            filas_conceptos.append(
+                [
+                    c["cantidad"],
+                    c["clave_prod_serv"],
+                    Paragraph(c["descripcion"], valor_style),
+                    money(c["valor_unitario"]),
+                    money(c["importe"]),
+                ]
+            )
+        tabla_conceptos = Table(
+            filas_conceptos,
+            colWidths=[15 * mm, 22 * mm, 73 * mm, 30 * mm, 30 * mm],
+            repeatRows=1,
+        )
+        tabla_conceptos.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F5FAFF")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#64748B")),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("ALIGN", (3, 0), (-1, -1), "RIGHT"),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("LINEBELOW", (0, 0), (-1, -2), 0.4, colors.HexColor("#E2E8F0")),
+                ]
+            )
+        )
+        elementos.append(tabla_conceptos)
+    else:
+        elementos.append(Paragraph("No fue posible leer los conceptos del XML.", subtitulo))
+    elementos.append(Spacer(1, 6 * mm))
+
+    totales_filas = [["Subtotal", money(doc.subtotal)]]
+    if doc.descuento:
+        totales_filas.append(["Descuento", money(doc.descuento)])
+    if doc.total_impuestos_trasladados:
+        totales_filas.append(["Impuestos trasladados", money(doc.total_impuestos_trasladados)])
+    if doc.total_impuestos_retenidos:
+        totales_filas.append(["Impuestos retenidos", money(doc.total_impuestos_retenidos)])
+    totales_filas.append(["Total", money(doc.total)])
+
+    tabla_totales = Table(totales_filas, colWidths=[40 * mm, 40 * mm], hAlign="RIGHT")
+    tabla_totales.setStyle(
+        TableStyle(
+            [
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                ("TEXTCOLOR", (0, 0), (-1, -2), colors.HexColor("#64748B")),
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, -1), (-1, -1), 11),
+                ("TOPPADDING", (0, -1), (-1, -1), 6),
+                ("LINEABOVE", (0, -1), (-1, -1), 0.6, colors.HexColor("#061A35")),
+            ]
+        )
+    )
+    elementos.append(tabla_totales)
+
+    pdf.build(elementos)
+    return buffer.getvalue()
