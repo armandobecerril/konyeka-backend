@@ -124,12 +124,12 @@ def _procesar_documento(documento_id: int) -> None:
         try:
             if documento.tipo == TIPO_OPINION_CUMPLIMIENTO:
                 pdf_bytes, resultado = descargar_opinion_cumplimiento(
-                    cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
+                    rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
                 )
                 documento.resultado = resultado
             else:
                 pdf_bytes = descargar_constancia_situacion_fiscal(
-                    cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
+                    rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
                 )
 
             storage = get_xml_storage()

@@ -20,25 +20,32 @@ seguridad por si el SAT lo vuelve a pedir (lo mostró en el pasado para otros
 flujos de login) o lo hace de forma intermitente.
 
 ####################################################################
-# AVISO IMPORTANTE -- selectores pendientes de verificar en vivo   #
+# Selectores de LOGIN verificados en vivo (2026-10-02)             #
 ####################################################################
-Los selectores de la página de login y de cada trámite están escritos con
-base en la estructura documentada del flujo de e.firma del SAT (archivos
-.cer/.key + contraseña + CAPTCHA), pero NO se probaron contra el portal real
--- este entorno de desarrollo no tiene forma de navegarlo. Cada línea
-marcada con "# TODO-VERIFICAR" es el punto exacto que hay que confirmar o
-ajustar la primera vez que esto se corra contra el SAT de verdad:
+Las URLs de entrada de cada trámite y el formulario de login con e.firma SÍ
+se verificaron navegando el portal público real de sat.gob.mx (sin escribir
+ninguna credencial, solo inspeccionando la estructura de la página pública).
+Lo que NO se pudo verificar todavía es la pantalla POSTERIOR al login (qué
+botón genera la Opinión/Constancia y cómo se descarga el PDF), porque esa
+pantalla solo aparece ya autenticado con una e.firma real, y no hay forma de
+probarla sin una. Cada línea que sigue sin confirmar sigue marcada con
+"# TODO-VERIFICAR": la primera corrida real contra producción (revisando
+documento.mensaje_error si truena, o con SAT_RPA_HEADLESS=false en un
+entorno con display) va a decir exactamente qué falta ajustar ahí.
 
-    1. Pon SAT_RPA_HEADLESS=false en el .env del backend (así se ve el
-       navegador en vez de correr oculto).
-    2. Corre una descarga de prueba con un cliente que tenga e.firma vigente.
-    3. Donde el navegador se trabe o el selector no encuentre el elemento,
-       usa el inspector de Playwright (page.pause() o `playwright codegen
-       <url>`) para capturar el selector real y reemplázalo aquí.
-
-El resto del feature (modelo, cola de estado, storage del PDF, endpoints,
-alerta en el frontend si la opinión es negativa) ya está completo y no
-depende de que estos selectores cambien."""
+Hallazgo de arquitectura importante (y la causa real del bug anterior, además
+de los selectores): el login del SAT NO es una URL fija reutilizable para
+ambos trámites. Cada trámite tiene su propia URL de entrada
+(URL_OPINION_CUMPLIMIENTO / URL_CONSTANCIA) que, sin sesión, redirige sola a
+una pantalla de login con un parámetro `target` que ya apunta de regreso a
+ese mismo trámite (dominios de login distintos por trámite:
+loginda.siat.sat.gob.mx para Opinión, login.siat.sat.gob.mx para Constancia
+-- pero es el mismo widget de NetIQ/Access Manager, con los mismos ids de
+campo en ambos). Por eso _iniciar_sesion_efirma() navega directo a la URL
+del trámite (nunca a una URL de login separada y fija como se hacía antes):
+al autenticarse, el SAT redirige solo de vuelta al trámite con la sesión ya
+iniciada -- no hace falta (ni es correcto) hacer un segundo page.goto() a una
+URL del trámite después del login."""
 import logging
 import tempfile
 from contextlib import contextmanager
@@ -51,11 +58,16 @@ from app.sat_documentos.captcha import resolver_captcha_imagen
 
 logger = logging.getLogger(__name__)
 
-# TODO-VERIFICAR: estas tres URLs son las documentadas públicamente para cada
-# trámite, pero el SAT las reorganiza con cierta frecuencia.
-LOGIN_URL = "https://loginda.siat.sat.gob.mx/nidp/wsfed/ep?id=SATxWEB"
-URL_OPINION_CUMPLIMIENTO = "https://siat.sat.gob.mx/PTSC/OpinionCumplimiento/"
-URL_CONSTANCIA = "https://rfcampliado.siat.sat.gob.mx/ConstanciaSF/"
+# URLs de entrada de cada trámite -- verificadas navegando el portal público
+# de sat.gob.mx (Trámites y Servicios > "Opinión del cumplimiento" /
+# "Constancia de Situación Fiscal" > sección "En línea" > enlace "Ingresa al
+# servicio"). Sin sesión, ambas redirigen solas a la pantalla de login.
+URL_OPINION_CUMPLIMIENTO = "https://ptsc32d.clouda.sat.gob.mx/?/reporteOpinion32DContribuyente"
+URL_CONSTANCIA = (
+    "https://wwwmat.sat.gob.mx/app/seg/faces/pages/lanzador.jsf"
+    "?url=/operacion/43824/reimprime-tus-acuses-del-rfc"
+    "&tipoLogeo=c&target=principal&hostServer=https://wwwmat.sat.gob.mx"
+)
 
 
 class SatPortalError(Exception):
@@ -77,39 +89,62 @@ def _navegador():
             browser.close()
 
 
-def _iniciar_sesion_efirma(page: Page, *, cer_bytes: bytes, key_bytes: bytes, password: str) -> None:
-    """Sube el .cer/.key a los campos de archivo del login con e.firma del
-    portal del SAT y resuelve el CAPTCHA si lo pide."""
+def _iniciar_sesion_efirma(
+    page: Page, tramite_url: str, *, rfc: str, cer_bytes: bytes, key_bytes: bytes, password: str
+) -> None:
+    """Navega directo a la URL de entrada del trámite (que redirige sola al
+    login) y se autentica con e.firma. Al terminar, `page` queda en la
+    pantalla del trámite ya con sesión -- el SAT redirige solo de regreso ahí
+    (ver el aviso de arriba sobre el parámetro `target`), así que el llamador
+    NO debe volver a navegar a la URL del trámite después de esta función."""
     with tempfile.TemporaryDirectory() as tmp:
         cer_path = Path(tmp) / "efirma.cer"
         key_path = Path(tmp) / "efirma.key"
         cer_path.write_bytes(cer_bytes)
         key_path.write_bytes(key_bytes)
 
-        page.goto(LOGIN_URL, wait_until="networkidle")
+        page.goto(tramite_url, wait_until="networkidle")
 
-        # El portal normalmente muestra primero una pestaña/botón para elegir
-        # el método de acceso; si existe, hay que seleccionar "e.firma" antes
-        # de que aparezcan los campos de archivo.
-        selector_tab_efirma = "text=Acceso con e.firma"  # TODO-VERIFICAR
-        if page.locator(selector_tab_efirma).count() > 0:
-            page.click(selector_tab_efirma)
+        # Verificado: el SAT siempre abre primero en la vista "Acceso por
+        # contraseña" (RFC + Contraseña + CAPTCHA); hay que cambiar a la
+        # vista "Acceso con e.firma" con este botón antes de que aparezcan
+        # los campos de archivo. id="buttonFiel" confirmado en ambos
+        # trámites (Opinión y Constancia, mismo widget de login). Se deja el
+        # texto como respaldo por si el SAT cambia el id en algún despliegue.
+        selector_boton_efirma = "#buttonFiel, text=Acceso con e.firma, text=e.firma"
+        if page.locator(selector_boton_efirma).count() > 0:
+            page.locator(selector_boton_efirma).first.click()
             page.wait_for_load_state("networkidle")
 
-        page.set_input_files("#certFileInput", str(cer_path))  # TODO-VERIFICAR
-        page.set_input_files("#keyFileInput", str(key_path))  # TODO-VERIFICAR
-        page.fill("#password", password)  # TODO-VERIFICAR
+        # Verificado contra el portal real: estos son los ids reales del
+        # formulario "Acceso con e.firma" (iguales en ambos trámites).
+        page.set_input_files("#fileCertificate", str(cer_path))
+        page.wait_for_timeout(300)
+        page.set_input_files("#filePrivateKey", str(key_path))
+        page.wait_for_timeout(300)
+        page.fill("#privateKeyPassword", password)
+        page.fill("#rfc", rfc)
 
-        selector_captcha_img = "#captchaImg"  # TODO-VERIFICAR
+        # Verificado: la vista "Acceso con e.firma" NO muestra CAPTCHA (a
+        # diferencia de "Acceso por contraseña", que sí lo pide) -- por eso
+        # ya no es necesario para el flujo normal. Se deja este bloque solo
+        # como red de seguridad por si el SAT lo llega a agregar aquí.
+        selector_captcha_img = "img[id*='captcha' i]"  # TODO-VERIFICAR si el SAT llega a mostrarlo en esta vista
         if page.locator(selector_captcha_img).count() > 0:
-            captcha_bytes = page.locator(selector_captcha_img).screenshot()
+            captcha_bytes = page.locator(selector_captcha_img).first.screenshot()
             texto_captcha = resolver_captcha_imagen(captcha_bytes)
-            page.fill("#captchaInput", texto_captcha)  # TODO-VERIFICAR
+            page.fill("#userCaptcha", texto_captcha)  # TODO-VERIFICAR selector exacto en esta vista
 
-        page.click("#submitButton")  # TODO-VERIFICAR
+        page.click("#submit")
         page.wait_for_load_state("networkidle")
 
-        selector_error = "text=no fue posible autenticar"  # TODO-VERIFICAR (texto exacto del error del SAT)
+        # TODO-VERIFICAR: texto exacto del mensaje de error del SAT cuando
+        # rechaza la e.firma (e.firma vencida, contraseña de la llave
+        # incorrecta, etc.) -- no se pudo confirmar sin autenticar de verdad.
+        selector_error = (
+            "text=no fue posible autenticar, text=no fue posible iniciar sesión, "
+            "text=no fue posible iniciar la sesión, text=Usuario o contraseña incorrectos"
+        )
         if page.locator(selector_error).count() > 0:
             raise SatPortalError(
                 "El SAT rechazó el login con esta e.firma. Verifica que la e.firma "
@@ -128,12 +163,19 @@ def _descargar_pdf_actual(page: Page, selector_boton_descarga: str) -> bytes:
     return Path(ruta).read_bytes()
 
 
-def descargar_opinion_cumplimiento(*, cer_bytes: bytes, key_bytes: bytes, password: str) -> tuple[bytes, str]:
+def descargar_opinion_cumplimiento(
+    *, rfc: str, cer_bytes: bytes, key_bytes: bytes, password: str
+) -> tuple[bytes, str]:
     """Regresa (pdf_bytes, resultado), con resultado en {"positivo", "negativo"}."""
     with _navegador() as page:
-        _iniciar_sesion_efirma(page, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password)
+        _iniciar_sesion_efirma(
+            page, URL_OPINION_CUMPLIMIENTO, rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
+        )
 
-        page.goto(URL_OPINION_CUMPLIMIENTO, wait_until="networkidle")
+        # A partir de aquí `page` ya está en la pantalla del trámite (el
+        # login redirigió solo de vuelta) -- NO se vuelve a navegar a
+        # URL_OPINION_CUMPLIMIENTO. Lo siguiente SÍ sigue sin verificar
+        # contra el portal real ya autenticado.
         page.click("text=Generar Opinión")  # TODO-VERIFICAR
         page.wait_for_load_state("networkidle")
 
@@ -152,11 +194,16 @@ def descargar_opinion_cumplimiento(*, cer_bytes: bytes, key_bytes: bytes, passwo
         return pdf_bytes, resultado
 
 
-def descargar_constancia_situacion_fiscal(*, cer_bytes: bytes, key_bytes: bytes, password: str) -> bytes:
+def descargar_constancia_situacion_fiscal(
+    *, rfc: str, cer_bytes: bytes, key_bytes: bytes, password: str
+) -> bytes:
     with _navegador() as page:
-        _iniciar_sesion_efirma(page, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password)
+        _iniciar_sesion_efirma(
+            page, URL_CONSTANCIA, rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
+        )
 
-        page.goto(URL_CONSTANCIA, wait_until="networkidle")
+        # Igual que en Opinión: `page` ya quedó en la pantalla del trámite
+        # tras el login, no se vuelve a navegar a URL_CONSTANCIA.
         page.click("text=Generar Constancia")  # TODO-VERIFICAR
         page.wait_for_load_state("networkidle")
 
