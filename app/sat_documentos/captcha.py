@@ -1,7 +1,13 @@
-"""Resuelve el CAPTCHA del login del portal del SAT (con e.firma o CIEC),
-necesario porque no hay forma confiable de resolverlo nosotros mismos sin un
-modelo o servicio externo. Dos proveedores intercambiables, elegidos con
-CAPTCHA_SOLVER_PROVIDER -- ver app/core/config.py:
+"""Resuelve el CAPTCHA del login del portal del SAT, para cuando de verdad
+aparece -- el login confirmado para Opinión de Cumplimiento y Constancia es
+con e.firma, y entrando así el SAT ya no lo pide (confirmado en el portal
+real), así que en el caso normal este módulo ni se llama (ver el `if
+page.locator(...).count() > 0` en rpa.py). Se deja como red de seguridad por
+si el SAT lo vuelve a mostrar, ya sea con e.firma o si en el futuro se
+agregara login con CIEC (RFC + contraseña). No hay forma confiable de
+resolverlo nosotros mismos sin un modelo o servicio externo -- dos
+proveedores intercambiables, elegidos con CAPTCHA_SOLVER_PROVIDER -- ver
+app/core/config.py:
 
     "2captcha"  -- servicio de terceros compatible con la API de 2Captcha
                    (in.php / res.php): un humano o modelo propio del

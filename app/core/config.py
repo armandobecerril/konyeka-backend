@@ -33,8 +33,12 @@ class Settings(BaseSettings):
     # trámites, a diferencia de la Descarga Masiva de CFDIs.
     # SAT_RPA_HEADLESS=false sirve para ver el navegador y ajustar selectores en desarrollo.
     SAT_RPA_HEADLESS: bool = True
-    # Resolución del CAPTCHA del login del portal del SAT. Dos proveedores
-    # intercambiables (CAPTCHA_SOLVER_PROVIDER):
+    # Resolución del CAPTCHA del login del portal del SAT -- OPCIONAL: el
+    # login confirmado es con e.firma, y entrando así el SAT ya no lo pide
+    # (lo confirmó el contador en el portal real), así que en el caso normal
+    # esto nunca se usa. Se deja configurado solo como red de seguridad por
+    # si el SAT lo vuelve a mostrar. Dos proveedores intercambiables
+    # (CAPTCHA_SOLVER_PROVIDER):
     #   "2captcha"  -> servicio de terceros compatible con la API de 2Captcha.
     #   "azure_llm" -> un modelo con visión desplegado en Azure AI Foundry
     #                  (o cualquier endpoint compatible con Chat Completions

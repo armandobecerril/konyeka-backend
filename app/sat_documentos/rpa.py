@@ -5,8 +5,19 @@ de Situación Fiscal.
 Por qué RPA y no un webservice (a diferencia de la Descarga Masiva de CFDIs,
 que sí tiene uno oficial en app/sat_downloads/sat_client.py): el SAT no
 expone una API pública para estos dos trámites, solo se obtienen entrando al
-portal. Esto simula esa sesión con un navegador headless (Playwright) y
-resuelve el CAPTCHA del login con un servicio externo (ver captcha.py).
+portal. Esto simula esa sesión con un navegador headless (Playwright).
+
+Login confirmado: SIEMPRE con e.firma (.cer/.key + contraseña de la llave),
+nunca con RFC+contraseña (CIEC) -- así lo decidió el despacho después de que
+el contador confirmó en el portal real que entrando con e.firma el SAT ya no
+pide CAPTCHA. Por eso _iniciar_sesion_efirma() solo intenta resolverlo si el
+elemento del CAPTCHA de verdad aparece en la página (ver el `if
+page.locator(...).count() > 0` más abajo): en el caso esperado (e.firma, sin
+CAPTCHA) ese bloque nunca se ejecuta y resolver_captcha_imagen() (captcha.py)
+ni siquiera se llama, así que CAPTCHA_SOLVER_PROVIDER/API_KEY no son
+obligatorios para que este feature funcione -- se dejan como red de
+seguridad por si el SAT lo vuelve a pedir (lo mostró en el pasado para otros
+flujos de login) o lo hace de forma intermitente.
 
 ####################################################################
 # AVISO IMPORTANTE -- selectores pendientes de verificar en vivo   #
