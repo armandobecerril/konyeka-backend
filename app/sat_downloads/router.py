@@ -10,6 +10,8 @@ from app.sat_downloads import service
 from app.sat_downloads.schemas import (
     CfdiListOut,
     CfdisResumenOut,
+    ColumnasPreferenciaIn,
+    ColumnasPreferenciaOut,
     MonedaConteo,
     ResumenMonedasOut,
     ResumenTotalesOut,
@@ -177,3 +179,24 @@ def descargar_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{doc.uuid}.pdf"'},
     )
+
+
+@router.get("/clientes/{rfc_client_id}/cfdis/columnas-preferencia", response_model=ColumnasPreferenciaOut)
+def obtener_columnas_preferencia(
+    rfc_client_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    columnas = service.obtener_preferencia_columnas(db, current_user.id, rfc_client_id)
+    return ColumnasPreferenciaOut(columnas=columnas)
+
+
+@router.put("/clientes/{rfc_client_id}/cfdis/columnas-preferencia", response_model=ColumnasPreferenciaOut)
+def guardar_columnas_preferencia(
+    rfc_client_id: int,
+    payload: ColumnasPreferenciaIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    columnas = service.guardar_preferencia_columnas(db, current_user.id, rfc_client_id, payload.columnas)
+    return ColumnasPreferenciaOut(columnas=columnas)

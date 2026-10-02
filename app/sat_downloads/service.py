@@ -15,7 +15,7 @@ from app.core.db import SessionLocal
 from app.core.storage import get_xml_storage
 from app.efirma.service import obtener_signer
 from app.sat_downloads import sat_client
-from app.sat_downloads.models import CfdiDocument, SolicitudDescarga
+from app.sat_downloads.models import CfdiDocument, ColumnaPreferencia, SolicitudDescarga
 from app.sat_downloads.schemas import SolicitudCreate
 
 logger = logging.getLogger(__name__)
@@ -734,3 +734,27 @@ def _renderizar_pdf_cfdi(doc: CfdiDocument, conceptos: list[dict]) -> bytes:
 
     pdf.build(elementos)
     return buffer.getvalue()
+
+
+def obtener_preferencia_columnas(db: Session, user_id: int, rfc_client_id: int) -> list[str]:
+    pref = (
+        db.query(ColumnaPreferencia)
+        .filter(ColumnaPreferencia.user_id == user_id, ColumnaPreferencia.rfc_client_id == rfc_client_id)
+        .first()
+    )
+    return list(pref.columnas) if pref else []
+
+
+def guardar_preferencia_columnas(db: Session, user_id: int, rfc_client_id: int, columnas: list[str]) -> list[str]:
+    pref = (
+        db.query(ColumnaPreferencia)
+        .filter(ColumnaPreferencia.user_id == user_id, ColumnaPreferencia.rfc_client_id == rfc_client_id)
+        .first()
+    )
+    if pref is None:
+        pref = ColumnaPreferencia(user_id=user_id, rfc_client_id=rfc_client_id, columnas=columnas)
+        db.add(pref)
+    else:
+        pref.columnas = columnas
+    db.commit()
+    return columnas

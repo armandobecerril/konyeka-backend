@@ -120,3 +120,13 @@ class CfdiDocumentOut(BaseModel):
 class CfdiListOut(BaseModel):
     items: list[CfdiDocumentOut]
     total: int
+
+
+class ColumnasPreferenciaOut(BaseModel):
+    """Columnas extra que el usuario dejó marcadas para este cliente."""
+
+    columnas: list[str]
+
+
+class ColumnasPreferenciaIn(BaseModel):
+    columnas: list[str]

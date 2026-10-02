@@ -43,6 +43,26 @@ class SolicitudDescarga(Base):
     )
 
 
+class ColumnaPreferencia(Base):
+    """Qué columnas extra ('cols' en la URL) dejó marcadas cada usuario para
+    la bóveda de facturas de cada cliente -- para que la próxima vez que
+    entre (sin filtros en la URL todavía) la tabla ya le aparezca con esa
+    personalización, en vez de tener que volver a marcarlas."""
+
+    __tablename__ = "cfdi_columna_preferencias"
+    __table_args__ = (
+        UniqueConstraint("user_id", "rfc_client_id", name="uq_columna_pref_user_cliente"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    rfc_client_id: Mapped[int] = mapped_column(ForeignKey("rfc_clients.id"), nullable=False, index=True)
+    columnas: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class CfdiDocument(Base):
     __tablename__ = "cfdi_documents"
     __table_args__ = (UniqueConstraint("rfc_client_id", "uuid", name="uq_cfdi_rfc_client_uuid"),)
