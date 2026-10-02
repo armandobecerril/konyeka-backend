@@ -375,17 +375,25 @@ def descargar_opinion_cumplimiento(
 ) -> tuple[bytes, str]:
     """Regresa (pdf_bytes, resultado), con resultado en {"positivo", "negativo"}."""
     with _navegador() as (page, consola_log):
-        _iniciar_sesion_efirma(
-            page, URL_OPINION_CUMPLIMIENTO, rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
-        )
-
-        # A partir de aquí `page` ya está en la pantalla del trámite (el
-        # login redirigió solo de vuelta) -- NO se vuelve a navegar a
-        # URL_OPINION_CUMPLIMIENTO. Lo siguiente SÍ sigue sin verificar
-        # contra el portal real ya autenticado -- si algo truena aquí, se
-        # guarda un screenshot del momento exacto (ver _guardar_diagnostico)
-        # para no tener que adivinar el selector a ciegas la próxima vez.
+        # OJO: el login (_iniciar_sesion_efirma) va DENTRO del try -- antes
+        # quedaba afuera, así que si tronaba ahí (p.ej. el SAT lento para
+        # responder el clic en "Enviar") la excepción se iba sin pasar por
+        # _guardar_diagnostico, y el mensaje de error genérico de
+        # service.py decía "intenta de nuevo" sin ningún screenshot que
+        # explicara por qué. `login_ok` distingue el mensaje según en qué
+        # etapa tronó.
+        login_ok = False
         try:
+            _iniciar_sesion_efirma(
+                page, URL_OPINION_CUMPLIMIENTO, rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
+            )
+            login_ok = True
+
+            # A partir de aquí `page` ya está en la pantalla del trámite (el
+            # login redirigió solo de vuelta) -- NO se vuelve a navegar a
+            # URL_OPINION_CUMPLIMIENTO. Lo siguiente SÍ sigue sin verificar
+            # contra el portal real ya autenticado.
+            #
             # OJO: a diferencia de Constancia, acá todavía no está confirmado si
             # el resultado (positivo/negativo) aparece en la misma pestaña antes
             # de descargar el PDF, o si -- como Constancia -- todo pasa en una
@@ -411,11 +419,19 @@ def descargar_opinion_cumplimiento(
             raise
         except Exception as exc:
             ruta_diagnostico = _guardar_diagnostico(page, consola_log, rfc=rfc, tipo=TIPO_OPINION_CUMPLIMIENTO)
+            if login_ok:
+                mensaje_etapa = (
+                    "El login con el SAT funcionó, pero el paso para generar/descargar la "
+                    "Opinión de Cumplimiento todavía no está verificado contra el portal real."
+                )
+            else:
+                mensaje_etapa = (
+                    "Falló el login con el SAT (antes de llegar a la pantalla del trámite) -- "
+                    "puede ser que el portal haya tardado más de lo normal en responder."
+                )
             raise SatPortalError(
-                "El login con el SAT funcionó, pero el paso para generar/descargar la "
-                "Opinión de Cumplimiento todavía no está verificado contra el portal real. "
-                f"Se guardó un screenshot del momento del error en: {ruta_diagnostico}. "
-                f"Detalle técnico: {type(exc).__name__}: {str(exc)[:300]}"
+                f"{mensaje_etapa} Se guardó un screenshot del momento del error en: "
+                f"{ruta_diagnostico}. Detalle técnico: {type(exc).__name__}: {str(exc)[:300]}"
             ) from exc
 
 
@@ -423,23 +439,38 @@ def descargar_constancia_situacion_fiscal(
     *, rfc: str, cer_bytes: bytes, key_bytes: bytes, password: str
 ) -> bytes:
     with _navegador() as (page, consola_log):
-        _iniciar_sesion_efirma(
-            page, URL_CONSTANCIA, rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
-        )
-
-        # Igual que en Opinión: `page` ya quedó en la pantalla del trámite
-        # tras el login, no se vuelve a navegar a URL_CONSTANCIA. Lo
-        # siguiente sigue sin verificar contra el portal real -- igual que
-        # en Opinión, si truena se guarda un screenshot del momento exacto.
+        # OJO: el login va DENTRO del try (antes quedaba afuera) -- si
+        # tronaba ahí (p.ej. el SAT lento para responder el clic en
+        # "Enviar"), la excepción se iba sin pasar por _guardar_diagnostico
+        # y el mensaje genérico de service.py no traía ningún screenshot
+        # que explicara por qué. `login_ok` distingue el mensaje según en
+        # qué etapa tronó.
+        login_ok = False
         try:
+            _iniciar_sesion_efirma(
+                page, URL_CONSTANCIA, rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
+            )
+            login_ok = True
+
+            # A partir de aquí `page` ya quedó en la pantalla del trámite
+            # tras el login, no se vuelve a navegar a URL_CONSTANCIA. Lo
+            # siguiente sigue sin verificar contra el portal real.
             return _generar_y_descargar_pdf(page, "Generar Constancia")  # TODO-VERIFICAR
         except SatPortalError:
             raise
         except Exception as exc:
             ruta_diagnostico = _guardar_diagnostico(page, consola_log, rfc=rfc, tipo=TIPO_CONSTANCIA)
+            if login_ok:
+                mensaje_etapa = (
+                    "El login con el SAT funcionó, pero el paso para generar/descargar la "
+                    "Constancia de Situación Fiscal todavía no está verificado contra el portal real."
+                )
+            else:
+                mensaje_etapa = (
+                    "Falló el login con el SAT (antes de llegar a la pantalla del trámite) -- "
+                    "puede ser que el portal haya tardado más de lo normal en responder."
+                )
             raise SatPortalError(
-                "El login con el SAT funcionó, pero el paso para generar/descargar la "
-                "Constancia de Situación Fiscal todavía no está verificado contra el "
-                f"portal real. Se guardó un screenshot del momento del error en: "
+                f"{mensaje_etapa} Se guardó un screenshot del momento del error en: "
                 f"{ruta_diagnostico}. Detalle técnico: {type(exc).__name__}: {str(exc)[:300]}"
             ) from exc
