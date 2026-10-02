@@ -124,11 +124,22 @@ def _iniciar_sesion_efirma(
         # Verificado contra el portal real: estos son los ids reales del
         # formulario "Acceso con e.firma" (iguales en ambos trámites).
         page.set_input_files("#fileCertificate", str(cer_path))
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(500)
         page.set_input_files("#filePrivateKey", str(key_path))
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(500)
         page.fill("#privateKeyPassword", password)
-        page.fill("#rfc", rfc)
+
+        # Confirmado en producción (error reportado por el usuario): en
+        # cuanto el SAT logra leer el .cer, extrae el RFC del certificado y
+        # deja el campo #rfc con `disabled` -- ya no se puede (ni hace
+        # falta) escribirlo a mano, por eso un fill() incondicional aquí
+        # tronaba con TimeoutError esperando a que se "habilitara". Si por
+        # algún motivo el SAT cambia este comportamiento y el campo sigue
+        # editable, sí lo llenamos nosotros como respaldo.
+        campo_rfc = page.locator("#rfc")
+        campo_rfc.wait_for(state="visible")
+        if campo_rfc.is_enabled():
+            campo_rfc.fill(rfc)
 
         # Verificado: la vista "Acceso con e.firma" NO muestra CAPTCHA (a
         # diferencia de "Acceso por contraseña", que sí lo pide) -- por eso
