@@ -14,9 +14,9 @@ from app.core.config import settings
 BASE_LOCAL_DIR = Path("data") / "blob"
 
 
-def _blob_name(rfc: str, tipo: str, uuid: str) -> str:
+def _blob_name(rfc: str, tipo: str, uuid: str, extension: str = "xml") -> str:
     rfc = rfc.upper().strip()
-    return f"{rfc}/{tipo}/{uuid}.xml"
+    return f"{rfc}/{tipo}/{uuid}.{extension}"
 
 
 class XmlStorage(ABC):
@@ -25,13 +25,24 @@ class XmlStorage(ABC):
         """Guarda el XML y regresa una referencia (path/key) para leerlo después."""
 
     @abstractmethod
+    def save_pdf(self, rfc: str, tipo: str, nombre: str, content: bytes) -> str:
+        """Igual que save(), pero para un PDF (ej. opinión de cumplimiento, constancia)."""
+
+    @abstractmethod
     def read(self, path: str) -> bytes:
-        """Lee de vuelta el XML guardado con save()."""
+        """Lee de vuelta el contenido guardado con save() o save_pdf()."""
 
 
 class LocalXmlStorage(XmlStorage):
     def save(self, rfc: str, tipo: str, uuid: str, content: bytes) -> str:
         name = _blob_name(rfc, tipo, uuid)
+        full_path = BASE_LOCAL_DIR / name
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_bytes(content)
+        return str(full_path)
+
+    def save_pdf(self, rfc: str, tipo: str, nombre: str, content: bytes) -> str:
+        name = _blob_name(rfc, tipo, nombre, extension="pdf")
         full_path = BASE_LOCAL_DIR / name
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_bytes(content)
@@ -56,6 +67,12 @@ class AzureBlobXmlStorage(XmlStorage):
         name = _blob_name(rfc, tipo, uuid)
         blob_client = self._client.get_blob_client(container=self._container_name, blob=name)
         blob_client.upload_blob(content, overwrite=True, content_type="application/xml")
+        return name
+
+    def save_pdf(self, rfc: str, tipo: str, nombre: str, content: bytes) -> str:
+        name = _blob_name(rfc, tipo, nombre, extension="pdf")
+        blob_client = self._client.get_blob_client(container=self._container_name, blob=name)
+        blob_client.upload_blob(content, overwrite=True, content_type="application/pdf")
         return name
 
     def read(self, path: str) -> bytes:

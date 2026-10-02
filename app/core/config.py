@@ -28,6 +28,18 @@ class Settings(BaseSettings):
     # Ambiente del webservice del SAT: PRODUCTION | TEST
     SAT_ENVIRONMENT: str = "PRODUCTION"
 
+    # RPA contra el portal del SAT (Opinión de Cumplimiento y Constancia de
+    # Situación Fiscal) -- el SAT no tiene webservice público para estos dos
+    # trámites, a diferencia de la Descarga Masiva de CFDIs.
+    # SAT_RPA_HEADLESS=false sirve para ver el navegador y ajustar selectores en desarrollo.
+    SAT_RPA_HEADLESS: bool = True
+    # Servicio externo de resolución de CAPTCHA (API compatible con 2Captcha),
+    # necesario porque el login del portal del SAT lo pide. Sin esta llave,
+    # las descargas de Opinión de Cumplimiento y Constancia fallan con un
+    # mensaje claro en vez de intentar adivinar el CAPTCHA.
+    CAPTCHA_SOLVER_API_KEY: str = ""
+    CAPTCHA_SOLVER_BASE_URL: str = "https://2captcha.com"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

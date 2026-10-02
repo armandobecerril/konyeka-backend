@@ -11,6 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Chromium para el RPA de Opinión de Cumplimiento / Constancia de Situación
+# Fiscal (app/sat_documentos/rpa.py). --with-deps instala también las
+# librerías del sistema que Chromium headless necesita en Debian.
+RUN playwright install --with-deps chromium
+
 COPY . .
 
 EXPOSE 8000

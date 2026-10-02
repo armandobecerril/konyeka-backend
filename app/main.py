@@ -7,6 +7,7 @@ from app.conciliacion.router import router as conciliacion_router
 from app.core.config import settings
 from app.efirma.router import router as efirma_router
 from app.rfc_clients.router import router as rfc_clients_router
+from app.sat_documentos.router import router as sat_documentos_router
 from app.sat_downloads.router import router as sat_downloads_router
 from app.sat_portal_ciec.router import router as sat_portal_router
 from app.sat_xml import simulate_sat_xml_download
@@ -35,6 +36,7 @@ app.include_router(users_router)
 app.include_router(rfc_clients_router)
 app.include_router(efirma_router)
 app.include_router(sat_downloads_router)
+app.include_router(sat_documentos_router)
 app.include_router(conciliacion_router)
 app.include_router(sat_portal_router)
 
