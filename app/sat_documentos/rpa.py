@@ -205,9 +205,12 @@ def _generar_y_descargar_pdf(page: Page, texto_boton_generar: str) -> bytes:
     antemano (sin e.firma real para probar) si eso significa (a) el clic
     dispara una descarga directa en la misma pestaña, (b) se abre una
     pestaña nueva que ya trae el PDF (como descarga, o mostrado inline por
-    el visor de PDF del navegador), o (c) el clic solo genera el documento y
-    aparece un botón/enlace "Descargar PDF" aparte en la misma pestaña. Se
-    cubren los tres, en ese orden."""
+    el visor de PDF del navegador), (c) el clic solo genera el documento y
+    aparece un botón/enlace "Descargar PDF" aparte en la misma pestaña, o
+    (d) la MISMA pestaña navega en el lugar directo a la URL del PDF (p.ej.
+    el servidor responde con Content-Disposition: inline y Chromium lo
+    renderiza con su visor interno, sin disparar ni un evento "download" ni
+    un evento "page" nuevo). Se cubren las cuatro, en ese orden."""
     boton = _buscar_en_cualquier_frame(page, texto_boton_generar)
     contexto = page.context
 
@@ -258,10 +261,29 @@ def _generar_y_descargar_pdf(page: Page, texto_boton_generar: str) -> bytes:
         if ruta is not None:
             return Path(ruta).read_bytes()
 
-    raise SatPortalError(
+    # (d) Ni descarga, ni pestaña nueva, ni botón "Descargar PDF" -- puede
+    # que la MISMA pestaña haya navegado en el lugar directo a la URL del
+    # PDF (el visor interno de PDF de Chromium no dispara "download" ni
+    # "page"). Se revisa la URL actual de la página principal.
+    try:
+        respuesta_misma_pestana = contexto.request.get(page.url)
+    except Exception:  # noqa: BLE001
+        respuesta_misma_pestana = None
+    if (
+        respuesta_misma_pestana is not None
+        and respuesta_misma_pestana.ok
+        and "pdf" in respuesta_misma_pestana.headers.get("content-type", "").lower()
+    ):
+        return respuesta_misma_pestana.body()
+
+    # Ningún escenario conocido aplicó. Se usa una excepción genérica (no
+    # SatPortalError) a propósito: así el llamador la captura en su rama
+    # `except Exception` -- que sí guarda un screenshot de diagnóstico --
+    # en lugar de la rama `except SatPortalError: raise`, que lo omitiría.
+    raise RuntimeError(
         "El SAT no generó el PDF para descargar (no hubo descarga directa, pestaña "
-        "nueva con el documento, ni un botón de descarga visible). Intenta de nuevo "
-        "más tarde."
+        "nueva con el documento, botón de descarga visible, ni la pestaña actual "
+        "navegó a un PDF)."
     )
 
 
