@@ -213,8 +213,13 @@ def _generar_y_descargar_pdf(page: Page, texto_boton_generar: str) -> bytes:
 
     descargas: list = []
     pestanas_nuevas: list = []
-    contexto.on("download", descargas.append)
-    contexto.on("page", pestanas_nuevas.append)
+    # OJO: pasar list.append directo (contexto.on("download", descargas.append))
+    # truena con AttributeError dentro de Playwright -- un método acoplado a
+    # una lista (list.append) es un builtin_function_or_method de C, y el
+    # despachador de eventos de Playwright espera una función de Python
+    # normal. Por eso se envuelve en un lambda.
+    contexto.on("download", lambda d: descargas.append(d))
+    contexto.on("page", lambda p: pestanas_nuevas.append(p))
 
     boton.first.click()
     page.wait_for_timeout(3000)  # dale tiempo a que la descarga/pestaña nueva aparezca
