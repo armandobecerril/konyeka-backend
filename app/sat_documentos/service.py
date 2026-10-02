@@ -140,10 +140,23 @@ def _procesar_documento(documento_id: int) -> None:
         except SatPortalError as exc:
             documento.estado = "error"
             documento.mensaje_error = str(exc)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.exception("Error inesperado al descargar %s para rfc_client_id=%s", documento.tipo, documento.rfc_client_id)
             documento.estado = "error"
-            documento.mensaje_error = "Ocurrió un error inesperado al conectar con el portal del SAT. Intenta de nuevo."
+            # Mientras los selectores de rpa.py sigan sin verificar contra el
+            # portal real (ver los "# TODO-VERIFICAR"), este es el caso
+            # esperado: Playwright no encuentra un elemento y truena con una
+            # excepción que no es SatPortalError. Se incluye el detalle
+            # técnico (tipo + primeros caracteres del mensaje) en vez de solo
+            # el genérico de siempre, para poder ubicar a qué paso del login
+            # o la descarga corresponde sin tener que ir a los logs del
+            # contenedor cada vez.
+            detalle = f"{type(exc).__name__}: {str(exc)}".strip()
+            detalle = detalle[:300] + "…" if len(detalle) > 300 else detalle
+            documento.mensaje_error = (
+                f"Ocurrió un error inesperado al conectar con el portal del SAT. Intenta de nuevo. "
+                f"Detalle técnico: {detalle}"
+            )
 
         documento.completado_at = datetime.now(timezone.utc)
         db.commit()
