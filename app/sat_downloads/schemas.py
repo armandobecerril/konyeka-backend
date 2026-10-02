@@ -22,8 +22,9 @@ class ResumenMonedasOut(BaseModel):
 
 class ResumenTotalesOut(BaseModel):
     """Resumen tipo 'Totales' de MyAdmin: cuenta e importe por tipo de
-    comprobante y por método de pago, sobre todas las facturas descargadas
-    del cliente (no solo la página actual)."""
+    comprobante y por método de pago, sobre las facturas que cumplen los
+    filtros activos (los mismos que la tabla de abajo), no todo el
+    historial del cliente."""
 
     ingresos_count: int
     ingresos_total: Decimal
@@ -31,6 +32,8 @@ class ResumenTotalesOut(BaseModel):
     egresos_total: Decimal
     traslados_count: int
     traslados_total: Decimal
+    pagos_count: int
+    pagos_total: Decimal
     ppd_count: int
     ppd_total: Decimal
     pue_count: int

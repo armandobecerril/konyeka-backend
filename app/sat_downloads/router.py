@@ -95,14 +95,29 @@ def resumen_monedas_cliente(
 @router.get("/clientes/{rfc_client_id}/cfdis/resumen-totales", response_model=ResumenTotalesOut)
 def resumen_totales_cliente(
     rfc_client_id: int,
+    tipo: str | None = Query(default=None, description="'emitido' o 'recibido'"),
+    fecha_desde: date | None = Query(default=None),
+    fecha_hasta: date | None = Query(default=None),
+    q: str | None = Query(default=None, description="Busca por UUID, RFC o nombre"),
+    complemento: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Totales por tipo de comprobante y método de pago, sobre todas las
-    facturas descargadas del cliente. Alimenta la barra de resumen tipo
-    MyAdmin sobre 'Tus facturas descargadas'."""
+    """Totales por tipo de comprobante y método de pago, sobre las facturas
+    que cumplen los MISMOS filtros que 'Tus facturas descargadas' -- así la
+    barra de resumen siempre refleja lo que está filtrado/visible abajo."""
     get_client(db, rfc_client_id)
-    return ResumenTotalesOut(**service.resumen_totales(db, rfc_client_id))
+    return ResumenTotalesOut(
+        **service.resumen_totales(
+            db,
+            rfc_client_id,
+            tipo=tipo,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            q=q,
+            complemento=complemento,
+        )
+    )
 
 
 @router.get("/clientes/{rfc_client_id}/cfdis", response_model=CfdiListOut)

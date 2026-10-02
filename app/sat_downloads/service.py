@@ -3,7 +3,7 @@
 import logging
 import time
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 
@@ -379,7 +379,7 @@ def _to_decimal(value) -> Decimal | None:
     return Decimal(str(value))
 
 
-def listar_cfdis(
+def _query_cfdis_filtrados(
     db: Session,
     rfc_client_id: int,
     *,
@@ -388,16 +388,24 @@ def listar_cfdis(
     fecha_hasta: date | None = None,
     q: str | None = None,
     complemento: str | None = None,
-    skip: int = 0,
-    limit: int = 100,
 ):
+    """Arma la consulta de CfdiDocument con los mismos filtros que usa la
+    tabla "Tus facturas descargadas" -- la comparten listar_cfdis() (para
+    pintar las filas) y resumen_totales() (para que la barra de Totales
+    siempre sume justo lo que está filtrado/visible abajo, nunca todo el
+    historial del cliente)."""
     query = db.query(CfdiDocument).filter(CfdiDocument.rfc_client_id == rfc_client_id)
     if tipo:
         query = query.filter(CfdiDocument.tipo == tipo)
     if fecha_desde:
         query = query.filter(CfdiDocument.fecha_emision >= fecha_desde)
     if fecha_hasta:
-        query = query.filter(CfdiDocument.fecha_emision <= fecha_hasta)
+        # fecha_emision es DateTime y fecha_hasta es un date "pelón": comparar
+        # con <= lo trata como medianoche de ese día, así que cualquier
+        # factura emitida después de las 00:00 del último día del rango
+        # quedaba excluida (el bug reportado con las facturas de combustible
+        # de fin de mes). Por eso el corte es "antes del día siguiente".
+        query = query.filter(CfdiDocument.fecha_emision < fecha_hasta + timedelta(days=1))
     if complemento == "gasolinas":
         query = query.filter(CfdiDocument.tiene_complemento_combustible.is_(True))
     if q:
@@ -411,7 +419,30 @@ def listar_cfdis(
                 CfdiDocument.receptor_rfc.ilike(like),
             )
         )
+    return query
 
+
+def listar_cfdis(
+    db: Session,
+    rfc_client_id: int,
+    *,
+    tipo: str | None = None,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
+    q: str | None = None,
+    complemento: str | None = None,
+    skip: int = 0,
+    limit: int = 100,
+):
+    query = _query_cfdis_filtrados(
+        db,
+        rfc_client_id,
+        tipo=tipo,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        q=q,
+        complemento=complemento,
+    )
     total = query.count()
     items = query.order_by(CfdiDocument.fecha_emision.desc()).offset(skip).limit(limit).all()
     return items, total
@@ -422,11 +453,29 @@ def contar_cfdis_totales(db: Session) -> int:
     return db.query(func.count(CfdiDocument.id)).scalar() or 0
 
 
-def resumen_totales(db: Session, rfc_client_id: int) -> dict:
-    """Cuenta e importe por tipo de comprobante y por método de pago, sobre
-    todas las facturas descargadas del cliente. Alimenta la barra de
-    'Totales' sobre Tus facturas descargadas, al estilo MyAdmin."""
-    base = db.query(CfdiDocument).filter(CfdiDocument.rfc_client_id == rfc_client_id)
+def resumen_totales(
+    db: Session,
+    rfc_client_id: int,
+    *,
+    tipo: str | None = None,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
+    q: str | None = None,
+    complemento: str | None = None,
+) -> dict:
+    """Cuenta e importe por tipo de comprobante y por método de pago. Recibe
+    los MISMOS filtros que listar_cfdis() para que la barra de Totales sobre
+    "Tus facturas descargadas" siempre sume lo que está filtrado/visible en
+    la tabla de abajo, no todo el historial del cliente."""
+    base = _query_cfdis_filtrados(
+        db,
+        rfc_client_id,
+        tipo=tipo,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        q=q,
+        complemento=complemento,
+    )
 
     def contar_y_sumar(filtro=None) -> tuple[int, Decimal]:
         query = base.filter(filtro) if filtro is not None else base
@@ -438,6 +487,7 @@ def resumen_totales(db: Session, rfc_client_id: int) -> dict:
     ingresos_count, ingresos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "I")
     egresos_count, egresos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "E")
     traslados_count, traslados_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "T")
+    pagos_count, pagos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "P")
     ppd_count, ppd_total = contar_y_sumar(CfdiDocument.metodo_pago == "PPD")
     pue_count, pue_total = contar_y_sumar(CfdiDocument.metodo_pago == "PUE")
     xml_count, xml_total = contar_y_sumar()
@@ -449,6 +499,8 @@ def resumen_totales(db: Session, rfc_client_id: int) -> dict:
         "egresos_total": egresos_total,
         "traslados_count": traslados_count,
         "traslados_total": traslados_total,
+        "pagos_count": pagos_count,
+        "pagos_total": pagos_total,
         "ppd_count": ppd_count,
         "ppd_total": ppd_total,
         "pue_count": pue_count,
