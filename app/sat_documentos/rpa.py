@@ -82,12 +82,27 @@ class SatPortalError(Exception):
 
 @contextmanager
 def _navegador():
+    """Además del `page`, entrega una lista `consola_log` que va acumulando
+    los mensajes de consola del navegador (console.log/warn/error) y los
+    errores de JavaScript no capturados de la página -- muy útil para
+    diagnosticar un SPA (como el de Opinión de Cumplimiento) que se queda en
+    blanco: si Angular truena con un error de JS, aparece ahí aunque el
+    screenshot no muestre nada."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=settings.SAT_RPA_HEADLESS)
         context = browser.new_context(accept_downloads=True)
         page = context.new_page()
+        consola_log: list[str] = []
+        page.on(
+            "console",
+            lambda msg: consola_log.append(f"[console.{msg.type}] {msg.text}"),
+        )
+        page.on(
+            "pageerror",
+            lambda err: consola_log.append(f"[pageerror] {err}"),
+        )
         try:
-            yield page
+            yield page, consola_log
         finally:
             context.close()
             browser.close()
@@ -173,6 +188,18 @@ def _iniciar_sesion_efirma(
                 "(no el sello/CSD) esté vigente y que la contraseña de la llave privada "
                 "sea correcta."
             )
+
+        # Algunas pantallas post-login (sobre todo la de Opinión, un SPA de
+        # Angular) siguen haciendo llamadas propias después de que la
+        # navegación ya se consideró "networkidle" una vez -- se vuelve a
+        # esperar por si acaso, sin fallar si ya no hay más actividad que
+        # esperar, más un margen fijo para que el framework termine de
+        # renderizar.
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:  # noqa: BLE001
+            pass
+        page.wait_for_timeout(2000)
 
 
 def _buscar_en_cualquier_frame(page: Page, texto: str):
@@ -287,7 +314,7 @@ def _generar_y_descargar_pdf(page: Page, texto_boton_generar: str) -> bytes:
     )
 
 
-def _guardar_diagnostico(page: Page, *, rfc: str, tipo: str) -> str:
+def _guardar_diagnostico(page: Page, consola_log: list[str], *, rfc: str, tipo: str) -> str:
     """Si un paso posterior al login (todavía marcado # TODO-VERIFICAR) truena, guarda
     un screenshot de la página completa en el momento exacto del error -- así la
     siguiente vez no hace falta adivinar el selector a ciegas, se puede ver tal cual
@@ -295,34 +322,59 @@ def _guardar_diagnostico(page: Page, *, rfc: str, tipo: str) -> str:
     se llega aquí el login ya se intentó, y de cualquier forma los navegadores pintan
     los campos type="password" como puntos incluso en un screenshot.
 
+    También guarda el HTML completo de la página (útil cuando el screenshot se ve
+    en blanco -- un SPA como el de Opinión puede tener contenido oculto, o un
+    toast/mensaje que ya desapareció antes del screenshot pero sigue en el DOM) y
+    el log de consola del navegador (console.log/warn/error + errores de
+    JavaScript no capturados) -- si Angular truena con un error de JS, esto lo
+    muestra aunque el screenshot no muestre nada.
+
     También reporta las pestañas abiertas en ese momento -- el SAT avisa que el
     resultado de Generar Opinión/Constancia "se muestra en otra ventana del
     navegador", así que esto dice de inmediato, sin bajar el screenshot, si se
     abrió una pestaña nueva y a qué URL."""
     pestanas = [p.url for p in page.context.pages]
+    nombre = f"debug-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    storage = get_xml_storage()
+    partes: list[str] = []
 
     try:
         captura = page.screenshot(full_page=True)
-    except Exception:  # noqa: BLE001
-        logger.exception("No se pudo tomar el screenshot de diagnóstico")
-        return f"(no se pudo capturar el screenshot; pestañas abiertas: {pestanas})"
-
-    nombre = f"debug-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
-    try:
-        ruta = get_xml_storage().save_debug(
+        ruta_png = storage.save_debug(
             rfc=rfc, tipo=tipo, nombre=nombre, content=captura, extension="png", content_type="image/png"
         )
-        return f"{ruta} (pestañas abiertas: {pestanas})"
+        partes.append(f"screenshot: {ruta_png}")
     except Exception:  # noqa: BLE001
-        logger.exception("No se pudo guardar el screenshot de diagnóstico")
-        return f"(no se pudo guardar el screenshot; pestañas abiertas: {pestanas})"
+        logger.exception("No se pudo tomar/guardar el screenshot de diagnóstico")
+        partes.append("screenshot: (falló)")
+
+    try:
+        html = page.content().encode("utf-8")
+        ruta_html = storage.save_debug(
+            rfc=rfc, tipo=tipo, nombre=nombre, content=html, extension="html", content_type="text/html"
+        )
+        partes.append(f"html: {ruta_html}")
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo guardar el HTML de diagnóstico")
+        partes.append("html: (falló)")
+
+    # Las últimas líneas de consola/errores de JS, directo en el mensaje de
+    # error para no tener que bajar nada si basta con eso.
+    if consola_log:
+        ultimas = consola_log[-10:]
+        partes.append("consola: " + " | ".join(ultimas))
+    else:
+        partes.append("consola: (sin mensajes)")
+
+    partes.append(f"pestañas abiertas: {pestanas}")
+    return "; ".join(partes)
 
 
 def descargar_opinion_cumplimiento(
     *, rfc: str, cer_bytes: bytes, key_bytes: bytes, password: str
 ) -> tuple[bytes, str]:
     """Regresa (pdf_bytes, resultado), con resultado en {"positivo", "negativo"}."""
-    with _navegador() as page:
+    with _navegador() as (page, consola_log):
         _iniciar_sesion_efirma(
             page, URL_OPINION_CUMPLIMIENTO, rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
         )
@@ -358,7 +410,7 @@ def descargar_opinion_cumplimiento(
         except SatPortalError:
             raise
         except Exception as exc:
-            ruta_diagnostico = _guardar_diagnostico(page, rfc=rfc, tipo=TIPO_OPINION_CUMPLIMIENTO)
+            ruta_diagnostico = _guardar_diagnostico(page, consola_log, rfc=rfc, tipo=TIPO_OPINION_CUMPLIMIENTO)
             raise SatPortalError(
                 "El login con el SAT funcionó, pero el paso para generar/descargar la "
                 "Opinión de Cumplimiento todavía no está verificado contra el portal real. "
@@ -370,7 +422,7 @@ def descargar_opinion_cumplimiento(
 def descargar_constancia_situacion_fiscal(
     *, rfc: str, cer_bytes: bytes, key_bytes: bytes, password: str
 ) -> bytes:
-    with _navegador() as page:
+    with _navegador() as (page, consola_log):
         _iniciar_sesion_efirma(
             page, URL_CONSTANCIA, rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
         )
@@ -384,7 +436,7 @@ def descargar_constancia_situacion_fiscal(
         except SatPortalError:
             raise
         except Exception as exc:
-            ruta_diagnostico = _guardar_diagnostico(page, rfc=rfc, tipo=TIPO_CONSTANCIA)
+            ruta_diagnostico = _guardar_diagnostico(page, consola_log, rfc=rfc, tipo=TIPO_CONSTANCIA)
             raise SatPortalError(
                 "El login con el SAT funcionó, pero el paso para generar/descargar la "
                 "Constancia de Situación Fiscal todavía no está verificado contra el "

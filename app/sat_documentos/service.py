@@ -4,7 +4,7 @@ en background que ya usa la Descarga Masiva de CFDIs
 (app/sat_downloads/service.py): se crea el registro, se marca "solicitado",
 y un background task hace el trabajo lento y actualiza el estado al terminar."""
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, HTTPException, status
 from sqlalchemy.orm import Session
@@ -23,6 +23,20 @@ from app.sat_documentos.rpa import (
 logger = logging.getLogger(__name__)
 
 TIPOS_VALIDOS = {TIPO_OPINION_CUMPLIMIENTO, TIPO_CONSTANCIA}
+
+# Las solicitudes corren como BackgroundTasks de FastAPI -- es decir, atadas
+# al proceso del contenedor que las recibió. Si se hace un redeploy (nueva
+# revisión en Azure Container Apps) mientras una solicitud sigue
+# "en_proceso", el contenedor viejo se mata junto con la tarea, que nunca
+# llega a escribir su estado final: el registro se queda huérfano en
+# "en_proceso" para siempre y el botón en la UI parece trabado sin importar
+# cuánto se espere. listar_documentos() revisa esto en cada consulta (el
+# frontend hace polling cada pocos segundos) y da por fallida cualquier
+# solicitud que lleve más de este tiempo sin resolver, para que la UI se
+# libere sola en el siguiente refresh. 10 minutos da margen de sobra incluso
+# en el peor caso real observado (~5 min) por los timeouts de red
+# encadenados del RPA.
+TIEMPO_MAXIMO_EN_PROCESO = timedelta(minutes=10)
 
 
 def _credenciales_efirma(db: Session, rfc_client_id: int) -> tuple[bytes, bytes, str]:
@@ -69,6 +83,33 @@ def solicitar_documento(
     return documento
 
 
+def _marcar_huerfana_si_quedo_colgada(db: Session, documento: DocumentoSat) -> DocumentoSat:
+    """Si `documento` lleva demasiado tiempo en "solicitado"/"en_proceso",
+    probablemente el contenedor que lo procesaba se reinició a medio
+    trabajo (ver TIEMPO_MAXIMO_EN_PROCESO arriba) -- se marca como error
+    aquí mismo para que la UI deje de mostrarlo como "en curso" sin que
+    haga falta tocar la base de datos a mano."""
+    if documento.estado not in ("solicitado", "en_proceso"):
+        return documento
+
+    creado = documento.created_at
+    if creado.tzinfo is None:
+        creado = creado.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - creado <= TIEMPO_MAXIMO_EN_PROCESO:
+        return documento
+
+    documento.estado = "error"
+    documento.mensaje_error = (
+        "El proceso anterior no llegó a terminar (lo más probable es que el servidor "
+        "se haya reiniciado a medio trabajo, por ejemplo por un despliegue nuevo). "
+        "Puedes intentar de nuevo."
+    )
+    documento.completado_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(documento)
+    return documento
+
+
 def listar_documentos(db: Session, rfc_client_id: int) -> list[DocumentoSat]:
     """Último registro de cada tipo (opinión y constancia), para pintar los
     íconos junto al RFC sin tener que disparar una descarga nueva."""
@@ -81,6 +122,7 @@ def listar_documentos(db: Session, rfc_client_id: int) -> list[DocumentoSat]:
             .first()
         )
         if ultimo is not None:
+            ultimo = _marcar_huerfana_si_quedo_colgada(db, ultimo)
             resultado.append(ultimo)
     return resultado
 
