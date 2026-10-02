@@ -29,6 +29,15 @@ class XmlStorage(ABC):
         """Igual que save(), pero para un PDF (ej. opinión de cumplimiento, constancia)."""
 
     @abstractmethod
+    def save_debug(
+        self, rfc: str, tipo: str, nombre: str, content: bytes, *, extension: str, content_type: str
+    ) -> str:
+        """Guarda un archivo de diagnóstico arbitrario (ej. un screenshot o el HTML de la
+        página cuando el RPA del SAT -- app/sat_documentos/rpa.py -- truena en un paso
+        cuyo selector todavía no se verificó contra el portal real). Mismo patrón que
+        save()/save_pdf() pero con extensión y content-type configurables."""
+
+    @abstractmethod
     def read(self, path: str) -> bytes:
         """Lee de vuelta el contenido guardado con save() o save_pdf()."""
 
@@ -43,6 +52,16 @@ class LocalXmlStorage(XmlStorage):
 
     def save_pdf(self, rfc: str, tipo: str, nombre: str, content: bytes) -> str:
         name = _blob_name(rfc, tipo, nombre, extension="pdf")
+        full_path = BASE_LOCAL_DIR / name
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_bytes(content)
+        return str(full_path)
+
+    def save_debug(
+        self, rfc: str, tipo: str, nombre: str, content: bytes, *, extension: str, content_type: str
+    ) -> str:
+        del content_type  # no aplica a disco local, solo lo usa Azure Blob
+        name = _blob_name(rfc, tipo, nombre, extension=extension)
         full_path = BASE_LOCAL_DIR / name
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_bytes(content)
@@ -73,6 +92,14 @@ class AzureBlobXmlStorage(XmlStorage):
         name = _blob_name(rfc, tipo, nombre, extension="pdf")
         blob_client = self._client.get_blob_client(container=self._container_name, blob=name)
         blob_client.upload_blob(content, overwrite=True, content_type="application/pdf")
+        return name
+
+    def save_debug(
+        self, rfc: str, tipo: str, nombre: str, content: bytes, *, extension: str, content_type: str
+    ) -> str:
+        name = _blob_name(rfc, tipo, nombre, extension=extension)
+        blob_client = self._client.get_blob_client(container=self._container_name, blob=name)
+        blob_client.upload_blob(content, overwrite=True, content_type=content_type)
         return name
 
     def read(self, path: str) -> bytes:

@@ -50,12 +50,15 @@ import logging
 import re
 import tempfile
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
 from app.core.config import settings
+from app.core.storage import get_xml_storage
 from app.sat_documentos.captcha import resolver_captcha_imagen
+from app.sat_documentos.models import TIPO_CONSTANCIA, TIPO_OPINION_CUMPLIMIENTO
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +185,29 @@ def _descargar_pdf_actual(page: Page, selector_boton_descarga: str) -> bytes:
     return Path(ruta).read_bytes()
 
 
+def _guardar_diagnostico(page: Page, *, rfc: str, tipo: str) -> str:
+    """Si un paso posterior al login (todavía marcado # TODO-VERIFICAR) truena, guarda
+    un screenshot de la página completa en el momento exacto del error -- así la
+    siguiente vez no hace falta adivinar el selector a ciegas, se puede ver tal cual
+    qué le mostró el SAT al RPA. No hay riesgo de capturar credenciales: para cuando
+    se llega aquí el login ya se intentó, y de cualquier forma los navegadores pintan
+    los campos type="password" como puntos incluso en un screenshot."""
+    try:
+        captura = page.screenshot(full_page=True)
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo tomar el screenshot de diagnóstico")
+        return "(no se pudo capturar el screenshot)"
+
+    nombre = f"debug-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    try:
+        return get_xml_storage().save_debug(
+            rfc=rfc, tipo=tipo, nombre=nombre, content=captura, extension="png", content_type="image/png"
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo guardar el screenshot de diagnóstico")
+        return "(no se pudo guardar el screenshot)"
+
+
 def descargar_opinion_cumplimiento(
     *, rfc: str, cer_bytes: bytes, key_bytes: bytes, password: str
 ) -> tuple[bytes, str]:
@@ -194,23 +220,36 @@ def descargar_opinion_cumplimiento(
         # A partir de aquí `page` ya está en la pantalla del trámite (el
         # login redirigió solo de vuelta) -- NO se vuelve a navegar a
         # URL_OPINION_CUMPLIMIENTO. Lo siguiente SÍ sigue sin verificar
-        # contra el portal real ya autenticado.
-        page.click("text=Generar Opinión")  # TODO-VERIFICAR
-        page.wait_for_load_state("networkidle")
+        # contra el portal real ya autenticado -- si algo truena aquí, se
+        # guarda un screenshot del momento exacto (ver _guardar_diagnostico)
+        # para no tener que adivinar el selector a ciegas la próxima vez.
+        try:
+            page.click("text=Generar Opinión")  # TODO-VERIFICAR
+            page.wait_for_load_state("networkidle")
 
-        contenido = page.inner_text("body").lower()
-        if "positivo" in contenido:
-            resultado = "positivo"
-        elif "negativo" in contenido:
-            resultado = "negativo"
-        else:
+            contenido = page.inner_text("body").lower()
+            if "positivo" in contenido:
+                resultado = "positivo"
+            elif "negativo" in contenido:
+                resultado = "negativo"
+            else:
+                raise SatPortalError(
+                    "Se generó la opinión pero no se pudo determinar si es positiva o "
+                    "negativa en la respuesta del SAT; revísala manualmente en el portal."
+                )
+
+            pdf_bytes = _descargar_pdf_actual(page, "text=Descargar PDF")  # TODO-VERIFICAR
+            return pdf_bytes, resultado
+        except SatPortalError:
+            raise
+        except Exception as exc:
+            ruta_diagnostico = _guardar_diagnostico(page, rfc=rfc, tipo=TIPO_OPINION_CUMPLIMIENTO)
             raise SatPortalError(
-                "Se generó la opinión pero no se pudo determinar si es positiva o "
-                "negativa en la respuesta del SAT; revísala manualmente en el portal."
-            )
-
-        pdf_bytes = _descargar_pdf_actual(page, "text=Descargar PDF")  # TODO-VERIFICAR
-        return pdf_bytes, resultado
+                "El login con el SAT funcionó, pero el paso para generar/descargar la "
+                "Opinión de Cumplimiento todavía no está verificado contra el portal real. "
+                f"Se guardó un screenshot del momento del error en: {ruta_diagnostico}. "
+                f"Detalle técnico: {type(exc).__name__}: {str(exc)[:300]}"
+            ) from exc
 
 
 def descargar_constancia_situacion_fiscal(
@@ -222,8 +261,21 @@ def descargar_constancia_situacion_fiscal(
         )
 
         # Igual que en Opinión: `page` ya quedó en la pantalla del trámite
-        # tras el login, no se vuelve a navegar a URL_CONSTANCIA.
-        page.click("text=Generar Constancia")  # TODO-VERIFICAR
-        page.wait_for_load_state("networkidle")
+        # tras el login, no se vuelve a navegar a URL_CONSTANCIA. Lo
+        # siguiente sigue sin verificar contra el portal real -- igual que
+        # en Opinión, si truena se guarda un screenshot del momento exacto.
+        try:
+            page.click("text=Generar Constancia")  # TODO-VERIFICAR
+            page.wait_for_load_state("networkidle")
 
-        return _descargar_pdf_actual(page, "text=Descargar PDF")  # TODO-VERIFICAR
+            return _descargar_pdf_actual(page, "text=Descargar PDF")  # TODO-VERIFICAR
+        except SatPortalError:
+            raise
+        except Exception as exc:
+            ruta_diagnostico = _guardar_diagnostico(page, rfc=rfc, tipo=TIPO_CONSTANCIA)
+            raise SatPortalError(
+                "El login con el SAT funcionó, pero el paso para generar/descargar la "
+                "Constancia de Situación Fiscal todavía no está verificado contra el "
+                f"portal real. Se guardó un screenshot del momento del error en: "
+                f"{ruta_diagnostico}. Detalle técnico: {type(exc).__name__}: {str(exc)[:300]}"
+            ) from exc
