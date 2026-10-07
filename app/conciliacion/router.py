@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -31,11 +33,17 @@ def resumen(
 def facturas(
     rfc_client_id: int,
     estado: str | None = Query(default=None, description="conciliada | parcial | pendiente"),
+    fecha_desde: date | None = Query(
+        default=None, description="PPD vs REP: fecha de emisión de la factura, desde (puede cubrir varios meses)"
+    ),
+    fecha_hasta: date | None = Query(
+        default=None, description="PPD vs REP: fecha de emisión de la factura, hasta"
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     get_client(db, rfc_client_id)
-    return service.listar_facturas(db, rfc_client_id, estado=estado)
+    return service.listar_facturas(db, rfc_client_id, estado=estado, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
 
 
 @router.get("/clientes/{rfc_client_id}/conciliacion/huerfanos", response_model=list[PagoHuerfanoOut])

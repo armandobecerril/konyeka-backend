@@ -9,7 +9,7 @@ puntaje y una explicación en español; el contador aprueba o rechaza cada
 sugerencia y solo lo aprobado cuenta para la conciliación.
 """
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -157,17 +157,35 @@ def _categoria(saldo: Decimal, total: Decimal) -> str:
     return "pendiente"
 
 
-def _facturas_ppd_con_estado(db: Session, rfc_client_id: int) -> list[dict]:
-    facturas = (
-        db.query(CfdiDocument)
-        .filter(
-            CfdiDocument.rfc_client_id == rfc_client_id,
-            CfdiDocument.tipo_comprobante == "I",
-            CfdiDocument.metodo_pago == "PPD",
-        )
-        .order_by(CfdiDocument.fecha_emision.desc())
-        .all()
+def _facturas_ppd_con_estado(
+    db: Session,
+    rfc_client_id: int,
+    *,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
+) -> list[dict]:
+    """fecha_desde/fecha_hasta filtran por la fecha de EMISIÓN de la factura
+    PPD -- para "PPD vs REP", donde el contador quiere acotar a un rango que
+    puede cubrir varios meses (un trimestre, por ejemplo), no solo uno. El
+    cruce con los complementos de pago (REP) que la liquidan NUNCA se filtra
+    por fecha: un pago casi siempre llega en un mes posterior al de la
+    factura (es justo el caso de uso de PPD), así que restringir los REP al
+    mismo rango escondería pagos reales y dañaría el saldo calculado."""
+    query = db.query(CfdiDocument).filter(
+        CfdiDocument.rfc_client_id == rfc_client_id,
+        CfdiDocument.tipo_comprobante == "I",
+        CfdiDocument.metodo_pago == "PPD",
     )
+    if fecha_desde:
+        query = query.filter(CfdiDocument.fecha_emision >= fecha_desde)
+    if fecha_hasta:
+        # Mismo criterio que _query_cfdis_filtrados en sat_downloads/service.py:
+        # fecha_hasta es un date "pelón" y fecha_emision es DateTime, así que
+        # "<=" lo trataría como medianoche de ese día y excluiría facturas
+        # emitidas más tarde ese mismo día -- se corta antes del día siguiente.
+        query = query.filter(CfdiDocument.fecha_emision < fecha_hasta + timedelta(days=1))
+
+    facturas = query.order_by(CfdiDocument.fecha_emision.desc()).all()
     if not facturas:
         return []
 
@@ -270,9 +288,16 @@ def resumen_conciliacion(db: Session, rfc_client_id: int) -> ResumenConciliacion
     )
 
 
-def listar_facturas(db: Session, rfc_client_id: int, estado: str | None = None) -> list[FacturaConciliacionOut]:
+def listar_facturas(
+    db: Session,
+    rfc_client_id: int,
+    estado: str | None = None,
+    *,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
+) -> list[FacturaConciliacionOut]:
     backfill_pagos_relacionados(db, rfc_client_id)
-    filas = _facturas_ppd_con_estado(db, rfc_client_id)
+    filas = _facturas_ppd_con_estado(db, rfc_client_id, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
     if estado:
         filas = [f for f in filas if f["estado"] == estado]
 
