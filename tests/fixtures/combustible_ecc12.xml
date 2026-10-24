@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:ecc12="http://www.sat.gob.mx/EstadoDeCuentaCombustible12" xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Version="4.0" Serie="EC" Folio="998877" Fecha="2026-09-30T23:10:00" SubTotal="4310.34" Moneda="MXN" Total="5000.00" TipoDeComprobante="I" Exportacion="01" MetodoPago="PUE" FormaPago="03" LugarExpedicion="06600" NoCertificado="00001000000500000000" Certificado="" Sello="">
+  <cfdi:Emisor Rfc="EFE8908015L3" Nombre="EFECTIVALE" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="ISC091120KE1" Nombre="INTELLIGENCE SOFTWARE CONSULTING" DomicilioFiscalReceptor="14140" RegimenFiscalReceptor="601" UsoCFDI="G03"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="15101505" Cantidad="1" ClaveUnidad="ACT" Descripcion="Estado de cuenta combustible septiembre" ValorUnitario="4310.34" Importe="4310.34" ObjetoImp="02">
+      <cfdi:Impuestos><cfdi:Traslados><cfdi:Traslado Base="4310.34" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="689.66"/></cfdi:Traslados></cfdi:Impuestos>
+    </cfdi:Concepto>
+  </cfdi:Conceptos>
+  <cfdi:Impuestos TotalImpuestosTrasladados="689.66"><cfdi:Traslados><cfdi:Traslado Base="4310.34" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="689.66"/></cfdi:Traslados></cfdi:Impuestos>
+  <cfdi:Complemento>
+    <ecc12:EstadoDeCuentaCombustible Version="1.2" TipoOperacion="Tarjeta" NumeroDeCuenta="123456" SubTotal="4310.34" Total="5000.00">
+      <ecc12:Conceptos>
+        <ecc12:ConceptoEstadoDeCuentaCombustible Identificador="1001" Fecha="2026-09-05T10:00:00" Rfc="GAS010101AB1" ClaveEstacion="PL/1234/EXP/ES/2015" Cantidad="100.00" TipoCombustible="3" Unidad="LTR" NombreCombustible="Diesel" FolioOperacion="A1" ValorUnitario="21.551724" Importe="2155.17">
+          <ecc12:Traslados><ecc12:Traslado Impuesto="IVA" TasaOCuota="0.160000" Importe="344.83"/></ecc12:Traslados>
+        </ecc12:ConceptoEstadoDeCuentaCombustible>
+        <ecc12:ConceptoEstadoDeCuentaCombustible Identificador="1002" Fecha="2026-09-20T18:00:00" Rfc="GAS020202CD2" ClaveEstacion="PL/5678/EXP/ES/2016" Cantidad="95.50" TipoCombustible="2" Unidad="LTR" NombreCombustible="Premium" FolioOperacion="A2" ValorUnitario="22.567" Importe="2155.17">
+          <ecc12:Traslados><ecc12:Traslado Impuesto="IVA" TasaOCuota="0.160000" Importe="344.83"/><ecc12:Traslado Impuesto="IEPS" TasaOCuota="6.1752" Importe="0"/></ecc12:Traslados>
+        </ecc12:ConceptoEstadoDeCuentaCombustible>
+      </ecc12:Conceptos>
+    </ecc12:EstadoDeCuentaCombustible>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="AAAAAAAA-1111-2222-3333-444444444444" FechaTimbrado="2026-09-30T23:11:00" RfcProvCertif="SAT970701NN3" SelloCFD="" NoCertificadoSAT="00001000000500000000" SelloSAT=""/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

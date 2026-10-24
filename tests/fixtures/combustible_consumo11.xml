@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:consumodecombustibles11="http://www.sat.gob.mx/ConsumoDeCombustibles11" xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Version="4.0" Fecha="2026-08-31T12:00:00" SubTotal="1000" Moneda="MXN" Total="1160" TipoDeComprobante="I" Exportacion="01" MetodoPago="PUE" FormaPago="03" LugarExpedicion="06600" NoCertificado="00001000000500000000" Certificado="" Sello="">
+  <cfdi:Emisor Rfc="EDE9612121K9" Nombre="EDENRED MEXICO" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="ISC091120KE1" Nombre="INTELLIGENCE SOFTWARE CONSULTING" DomicilioFiscalReceptor="14140" RegimenFiscalReceptor="601" UsoCFDI="G03"/>
+  <cfdi:Conceptos><cfdi:Concepto ClaveProdServ="15101514" Cantidad="1" ClaveUnidad="ACT" Descripcion="Consumo" ValorUnitario="1000" Importe="1000" ObjetoImp="02"/></cfdi:Conceptos>
+  <cfdi:Complemento>
+    <consumodecombustibles11:ConsumoDeCombustibles version="1.1" tipoOperacion="monedero electrónico" numeroDeCuenta="999" subTotal="1000" total="1160">
+      <consumodecombustibles11:Conceptos>
+        <consumodecombustibles11:ConceptoConsumoDeCombustibles identificador="7" fecha="2026-08-15T08:00:00" rfc="GAS010101AB1" claveEstacion="PL/1234/EXP/ES/2015" tipoCombustible="1" cantidad="45.5" nombreCombustible="Magna" folioOperacion="Z9" valorUnitario="21.978" importe="1000">
+          <consumodecombustibles11:Determinados><consumodecombustibles11:Determinado impuesto="IVA" tasaOCuota="0.16" importe="160"/></consumodecombustibles11:Determinados>
+        </consumodecombustibles11:ConceptoConsumoDeCombustibles>
+      </consumodecombustibles11:Conceptos>
+    </consumodecombustibles11:ConsumoDeCombustibles>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="BBBBBBBB-1111-2222-3333-444444444444" FechaTimbrado="2026-08-31T12:01:00" RfcProvCertif="SAT970701NN3" SelloCFD="" NoCertificadoSAT="00001000000500000000" SelloSAT=""/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

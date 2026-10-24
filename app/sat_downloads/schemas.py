@@ -102,6 +102,7 @@ class CfdiDocumentOut(BaseModel):
     domicilio_fiscal_receptor: str | None
     fecha_emision: datetime
     total: Decimal
+    monto_pago: Decimal | None = None
     subtotal: Decimal | None
     moneda: str | None
     metodo_pago: str | None
@@ -130,3 +131,13 @@ class ColumnasPreferenciaOut(BaseModel):
 
 class ColumnasPreferenciaIn(BaseModel):
     columnas: list[str]
+
+
+class ConteosGrupoOut(BaseModel):
+    """Contadores de las sub-pestañas de la bóveda."""
+
+    facturas: int
+    pagos: int
+    nomina: int
+    traslados: int
+    todos: int

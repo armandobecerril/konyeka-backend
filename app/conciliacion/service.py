@@ -19,7 +19,10 @@ from sqlalchemy.orm import Session
 
 from app.conciliacion.models import ConciliacionSugerencia, PagoRelacionado
 from app.conciliacion.schemas import (
+    DetallePagosFacturaOut,
     FacturaConciliacionOut,
+    MovimientoAplicadoOut,
+    PagoAplicadoOut,
     GenerarSugerenciasOut,
     PagoHuerfanoOut,
     ResumenConciliacionOut,
@@ -207,8 +210,31 @@ def _facturas_ppd_con_estado(
         .all()
     )
 
+    info_pagos = {
+        uuid: (n, ultimo)
+        for uuid, n, ultimo in db.query(
+            func.upper(PagoRelacionado.uuid_factura_relacionada),
+            func.count(PagoRelacionado.id),
+            func.max(PagoRelacionado.fecha_pago),
+        )
+        .filter(PagoRelacionado.rfc_client_id == rfc_client_id)
+        .group_by(func.upper(PagoRelacionado.uuid_factura_relacionada))
+        .all()
+    }
+    conteo_aprobados = dict(
+        db.query(ConciliacionSugerencia.factura_cfdi_id, func.count(ConciliacionSugerencia.id))
+        .filter(
+            ConciliacionSugerencia.rfc_client_id == rfc_client_id,
+            ConciliacionSugerencia.estado == "aprobada",
+        )
+        .group_by(ConciliacionSugerencia.factura_cfdi_id)
+        .all()
+    )
+    pagadas_en_banco = _facturas_pagadas_en_banco(db, rfc_client_id)
+
     resultado = []
     for factura in facturas:
+        num_exactos, ultimo_pago = info_pagos.get(factura.uuid.upper(), (0, None))
         monto_pagado = (pagos_exactos.get(factura.uuid.upper()) or Decimal("0")) + (
             pagos_aprobados.get(factura.id) or Decimal("0")
         )
@@ -221,9 +247,35 @@ def _facturas_ppd_con_estado(
                 "monto_pagado": monto_pagado,
                 "saldo": saldo,
                 "estado": _categoria(saldo, factura.total),
+                "num_pagos": num_exactos + conteo_aprobados.get(factura.id, 0),
+                "ultimo_pago": ultimo_pago,
+                "pagada_en_banco_sin_rep": factura.id in pagadas_en_banco
+                and saldo > TOLERANCIA_SALDO,
             }
         )
     return resultado
+
+
+def _facturas_pagadas_en_banco(db: Session, rfc_client_id: int) -> set[int]:
+    """Facturas con un movimiento bancario aprobado (conciliación bancaria).
+    Import perezoso: el módulo de bancos es opcional para la conciliación de
+    pagos y no debe romperla si su tabla todavía no existe."""
+    try:
+        from app.bancos.models import VinculoBancario
+
+        return {
+            fila[0]
+            for fila in db.query(VinculoBancario.cfdi_id)
+            .filter(
+                VinculoBancario.rfc_client_id == rfc_client_id,
+                VinculoBancario.estado == "aprobada",
+                VinculoBancario.cfdi_id.isnot(None),
+            )
+            .all()
+        }
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        return set()
 
 
 def _pagos_huerfanos_query(db: Session, rfc_client_id: int):
@@ -322,9 +374,112 @@ def listar_facturas(
                 saldo=fila["saldo"],
                 estado=fila["estado"],
                 dias_desde_emision=dias,
+                serie=factura.serie,
+                folio=factura.folio,
+                num_pagos=fila["num_pagos"],
+                ultimo_pago=fila["ultimo_pago"],
+                pagada_en_banco_sin_rep=fila["pagada_en_banco_sin_rep"],
             )
         )
     return resultado
+
+
+def detalle_pagos_factura(db: Session, rfc_client_id: int, factura_id: int) -> DetallePagosFacturaOut:
+    """Trazabilidad de una factura PPD: qué complementos (REP) se le
+    aplicaron -- por UUID exacto o por sugerencia aprobada --, con
+    parcialidad, saldo anterior, pagado e insoluto, y qué movimientos
+    bancarios la respaldan. Es lo que el contador revisaba XML por XML."""
+    factura = (
+        db.query(CfdiDocument)
+        .filter(CfdiDocument.id == factura_id, CfdiDocument.rfc_client_id == rfc_client_id)
+        .first()
+    )
+    if factura is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factura no encontrada")
+    backfill_pagos_relacionados(db, rfc_client_id)
+
+    exactos = (
+        db.query(PagoRelacionado)
+        .filter(
+            PagoRelacionado.rfc_client_id == rfc_client_id,
+            func.upper(PagoRelacionado.uuid_factura_relacionada) == factura.uuid.upper(),
+        )
+        .all()
+    )
+    aprobados = (
+        db.query(PagoRelacionado)
+        .join(ConciliacionSugerencia, ConciliacionSugerencia.pago_relacionado_id == PagoRelacionado.id)
+        .filter(
+            ConciliacionSugerencia.rfc_client_id == rfc_client_id,
+            ConciliacionSugerencia.factura_cfdi_id == factura.id,
+            ConciliacionSugerencia.estado == "aprobada",
+        )
+        .all()
+    )
+    ids_rep = {p.cfdi_pago_id for p in exactos + aprobados}
+    reps = {d.id: d for d in db.query(CfdiDocument).filter(CfdiDocument.id.in_(ids_rep)).all()} if ids_rep else {}
+
+    pagos: list[PagoAplicadoOut] = []
+    for origen, lista in (("uuid", exactos), ("sugerencia", aprobados)):
+        for p in lista:
+            rep = reps.get(p.cfdi_pago_id)
+            pagos.append(
+                PagoAplicadoOut(
+                    pago_relacionado_id=p.id,
+                    cfdi_pago_id=p.cfdi_pago_id,
+                    uuid_pago=p.uuid_pago,
+                    origen=origen,
+                    num_parcialidad=p.num_parcialidad,
+                    fecha_pago=p.fecha_pago,
+                    forma_pago=p.forma_pago,
+                    imp_saldo_ant=p.imp_saldo_ant,
+                    imp_pagado=p.imp_pagado,
+                    imp_saldo_insoluto=p.imp_saldo_insoluto,
+                    fecha_emision_rep=rep.fecha_emision if rep else None,
+                    emisor_rfc=rep.emisor_rfc if rep else None,
+                    emisor_nombre=rep.emisor_nombre if rep else None,
+                )
+            )
+    pagos.sort(key=lambda x: (x.num_parcialidad, x.fecha_pago or datetime.min))
+
+    monto_pagado = sum((p.imp_pagado for p in pagos), Decimal("0"))
+    saldo = max(factura.total - monto_pagado, Decimal("0"))
+
+    movimientos: list[MovimientoAplicadoOut] = []
+    try:
+        from app.bancos.models import CuentaBancaria, MovimientoBancario, VinculoBancario
+
+        filas = (
+            db.query(VinculoBancario, MovimientoBancario, CuentaBancaria)
+            .join(MovimientoBancario, MovimientoBancario.id == VinculoBancario.movimiento_id)
+            .join(CuentaBancaria, CuentaBancaria.id == MovimientoBancario.cuenta_id)
+            .filter(VinculoBancario.cfdi_id.in_([factura.id, *ids_rep]), VinculoBancario.estado == "aprobada")
+            .all()
+        )
+        for vinculo, mov, cuenta in filas:
+            movimientos.append(
+                MovimientoAplicadoOut(
+                    movimiento_id=mov.id,
+                    fecha=datetime.combine(mov.fecha, datetime.min.time()) if mov.fecha else None,
+                    descripcion=mov.descripcion,
+                    monto=mov.monto,
+                    banco=cuenta.banco,
+                    tipo_vinculo=vinculo.tipo_vinculo,
+                )
+            )
+    except Exception:  # noqa: BLE001
+        db.rollback()
+
+    return DetallePagosFacturaOut(
+        factura_id=factura.id,
+        uuid=factura.uuid,
+        total=factura.total,
+        monto_pagado=monto_pagado,
+        saldo=saldo,
+        estado=_categoria(saldo, factura.total),
+        pagos=pagos,
+        movimientos_bancarios=movimientos,
+    )
 
 
 def listar_pagos_huerfanos(db: Session, rfc_client_id: int) -> list[PagoHuerfanoOut]:

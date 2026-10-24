@@ -8,6 +8,8 @@ sys.path.append(os.getcwd())
 
 from app.core.config import settings  # noqa: E402
 from app.core.db import Base  # noqa: E402
+from app.bancos import models as bancos_models  # noqa: E402,F401
+from app.conciliacion import models as conciliacion_models  # noqa: E402,F401
 from app.efirma import models as efirma_models  # noqa: E402,F401
 from app.rfc_clients import models as rfc_clients_models  # noqa: E402,F401
 from app.sat_downloads import models as sat_downloads_models  # noqa: E402,F401

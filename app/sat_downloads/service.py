@@ -213,7 +213,12 @@ def _tiene_complemento_combustible(xml_bytes: bytes, lista_complementos: list[st
         return True
     # Respaldo por si satcfdi no reconoce el namespace exacto del complemento:
     # buscamos directo el nombre de la etiqueta raíz en el XML crudo.
-    return b"ConsumoDeCombustibles" in xml_bytes or b"EstadoDeCuentaCombustible" in xml_bytes
+    if b"ConsumoDeCombustibles" in xml_bytes or b"EstadoDeCuentaCombustible" in xml_bytes:
+        return True
+    # Factura directa de gasolinera (sin complemento): conceptos de gasolina
+    # o diésel (ClaveProdServ 151015xx) -- también es "factura de gasolina"
+    # para el contador y entra al reporte de combustibles para la DIOT.
+    return b'ClaveProdServ="151015' in xml_bytes
 
 
 def _procesar_paquete(
@@ -290,7 +295,8 @@ def _procesar_paquete(
                 fecha_emision=_to_datetime(cfdi.get("Fecha")),
                 total=_to_decimal(cfdi.get("Total")) or Decimal("0"),
                 subtotal=_to_decimal(cfdi.get("SubTotal")),
-                moneda=_texto(cfdi.get("Moneda")),
+                moneda=moneda_comprobante(cfdi),
+                monto_pago=monto_pagos(cfdi),
                 metodo_pago=_texto(cfdi.get("MetodoPago")),
                 forma_pago=_texto(cfdi.get("FormaPago")),
                 uso_cfdi=_texto(receptor.get("UsoCFDI")),
@@ -317,6 +323,115 @@ def _procesar_paquete(
             guardar_pagos_relacionados(db, doc, cfdi)
 
     return guardados
+
+
+# Códigos que NO son una moneda real. "XXX" es el que el SAT exige en el
+# encabezado de un CFDI de Pago (P) o de Traslado (T); "XMN" es un typo que
+# varios emisores mandan en lugar de "MXN" (lo reportó el contador).
+MONEDAS_NO_VALIDAS = {"XXX", "XMN", ""}
+
+
+def _normalizar_moneda(codigo: str | None) -> str | None:
+    if codigo is None:
+        return None
+    codigo = codigo.strip().upper()
+    if codigo in MONEDAS_NO_VALIDAS:
+        return None
+    return codigo
+
+
+def _lista(valor) -> list:
+    if valor is None:
+        return []
+    return valor if isinstance(valor, list) else [valor]
+
+
+def _pagos_del_complemento(cfdi) -> list:
+    complemento = cfdi.get("Complemento") or {}
+    pagos = complemento.get("Pagos")
+    if not pagos:
+        return []
+    return _lista(pagos.get("Pago"))
+
+
+def moneda_comprobante(cfdi) -> str:
+    """Moneda "real" del comprobante, según su TipoDeComprobante.
+
+    - Ingreso/Egreso/Nómina: el atributo `Moneda` del encabezado.
+    - Pago (P): el encabezado siempre trae "XXX" por especificación del SAT;
+      la moneda real es `MonedaP` de cada <Pago> (Pagos 1.0 y 2.0), y como
+      respaldo `MonedaDR` del documento relacionado.
+    - Si no hay ningún dato válido (o viene "XXX"/"XMN"), se asume MXN: son
+      operaciones nacionales y es lo que el contador espera ver."""
+    tipo = _texto(cfdi.get("TipoDeComprobante"))
+    if tipo == "P":
+        for pago in _pagos_del_complemento(cfdi):
+            moneda = _normalizar_moneda(_texto(pago.get("MonedaP")))
+            if moneda:
+                return moneda
+            for docto in _lista(pago.get("DoctoRelacionado")):
+                moneda = _normalizar_moneda(_texto(docto.get("MonedaDR")))
+                if moneda:
+                    return moneda
+        return "MXN"
+    return _normalizar_moneda(_texto(cfdi.get("Moneda"))) or "MXN"
+
+
+def monto_pagos(cfdi) -> Decimal | None:
+    """Importe real de un CFDI de Pago (P): `Totales/MontoTotalPagos` (Pagos
+    2.0) o la suma de `Monto` de cada <Pago>. None para otros tipos."""
+    if _texto(cfdi.get("TipoDeComprobante")) != "P":
+        return None
+    complemento = cfdi.get("Complemento") or {}
+    pagos = complemento.get("Pagos") or {}
+    totales = pagos.get("Totales") if hasattr(pagos, "get") else None
+    if totales and totales.get("MontoTotalPagos") is not None:
+        return _to_decimal(totales.get("MontoTotalPagos"))
+    total = Decimal("0")
+    for pago in _pagos_del_complemento(cfdi):
+        total += _to_decimal(pago.get("Monto")) or Decimal("0")
+    return total
+
+
+def backfill_pagos_moneda(db: Session, rfc_client_id: int) -> int:
+    """Corrige los CFDI de Pago ya descargados: moneda (MonedaP en vez del
+    "XXX" del encabezado) y monto_pago. Relee el XML de la bóveda, sin volver
+    a descargar nada del SAT. Idempotente y barato: solo toca los P que aún
+    tengan moneda o monto_pago en NULL."""
+    from satcfdi.cfdi import CFDI
+
+    pendientes = (
+        db.query(CfdiDocument)
+        .filter(
+            CfdiDocument.rfc_client_id == rfc_client_id,
+            CfdiDocument.tipo_comprobante == "P",
+            or_(
+                CfdiDocument.moneda.is_(None),
+                CfdiDocument.monto_pago.is_(None),
+                CfdiDocument.moneda.in_(list(MONEDAS_NO_VALIDAS)),
+            ),
+        )
+        .all()
+    )
+    if not pendientes:
+        return 0
+    storage = get_xml_storage()
+    corregidos = 0
+    for doc in pendientes:
+        try:
+            cfdi = CFDI.from_string(storage.read(doc.storage_path))
+        except Exception:  # noqa: BLE001
+            logger.warning("No se pudo releer el XML del pago %s para corregir moneda", doc.id)
+            doc.moneda = doc.moneda or "MXN"
+            continue
+        nueva_moneda = moneda_comprobante(cfdi)
+        nuevo_monto = monto_pagos(cfdi)
+        if doc.moneda != nueva_moneda or doc.monto_pago != nuevo_monto:
+            doc.moneda = nueva_moneda
+            doc.monto_pago = nuevo_monto
+            corregidos += 1
+    db.commit()
+    return corregidos
 
 
 def _texto(value) -> str | None:
@@ -379,6 +494,59 @@ def _to_decimal(value) -> Decimal | None:
     return Decimal(str(value))
 
 
+# --------------------------------------------------------------------------
+# Filtros de la bóveda "Tus facturas descargadas"
+# --------------------------------------------------------------------------
+
+# Sub-pestañas de la bóveda (como MiAdmin: Facturas · Pagos · Nómina).
+GRUPOS_TIPO_COMPROBANTE: dict[str, tuple[str, ...]] = {
+    "facturas": ("I", "E"),
+    "pagos": ("P",),
+    "nomina": ("N",),
+    "traslados": ("T",),
+}
+
+
+def parsear_meses(valor: str | None) -> list[tuple[int, int]]:
+    """'2026-08,2026-09' -> [(2026, 8), (2026, 9)]. Ignora lo que no sea
+    YYYY-MM válido, quita repetidos y ordena."""
+    if not valor:
+        return []
+    meses: set[tuple[int, int]] = set()
+    for parte in valor.split(","):
+        parte = parte.strip()
+        if len(parte) != 7 or parte[4] != "-":
+            continue
+        try:
+            anio, mes = int(parte[:4]), int(parte[5:])
+        except ValueError:
+            continue
+        if 2000 <= anio <= 2100 and 1 <= mes <= 12:
+            meses.add((anio, mes))
+    return sorted(meses)
+
+
+def rango_mes(anio: int, mes: int) -> tuple[datetime, datetime]:
+    """[primer instante del mes, primer instante del mes siguiente)."""
+    inicio = datetime(anio, mes, 1)
+    fin = datetime(anio + (mes // 12), (mes % 12) + 1, 1)
+    return inicio, fin
+
+
+def filtro_meses(columna, meses: list[tuple[int, int]]):
+    """Condición OR de rangos semiabiertos por mes. Se usa `< inicio del mes
+    siguiente` (no `<= último día`) porque la columna es DateTime: el
+    `<= fecha` pelón trataba el último día como medianoche y dejaba fuera
+    lo emitido ese día después de las 00:00."""
+    from sqlalchemy import and_
+
+    condiciones = []
+    for anio, mes in meses:
+        inicio, fin = rango_mes(anio, mes)
+        condiciones.append(and_(columna >= inicio, columna < fin))
+    return or_(*condiciones)
+
+
 def _query_cfdis_filtrados(
     db: Session,
     rfc_client_id: int,
@@ -386,30 +554,36 @@ def _query_cfdis_filtrados(
     tipo: str | None = None,
     fecha_desde: date | None = None,
     fecha_hasta: date | None = None,
+    meses: str | None = None,
+    grupo: str | None = None,
     q: str | None = None,
     complemento: str | None = None,
 ):
     """Arma la consulta de CfdiDocument con los mismos filtros que usa la
     tabla "Tus facturas descargadas" -- la comparten listar_cfdis() (para
-    pintar las filas) y resumen_totales() (para que la barra de Totales
-    siempre sume justo lo que está filtrado/visible abajo, nunca todo el
-    historial del cliente)."""
+    pintar las filas), resumen_totales() y conteos_por_grupo() para que todo
+    lo que se ve en pantalla sume exactamente lo mismo.
+
+    `meses` ("2026-08,2026-09", acumulables y de distintos años) tiene
+    prioridad sobre fecha_desde/fecha_hasta."""
     query = db.query(CfdiDocument).filter(CfdiDocument.rfc_client_id == rfc_client_id)
     if tipo:
         query = query.filter(CfdiDocument.tipo == tipo)
-    if fecha_desde:
-        query = query.filter(CfdiDocument.fecha_emision >= fecha_desde)
-    if fecha_hasta:
-        # fecha_emision es DateTime y fecha_hasta es un date "pelón": comparar
-        # con <= lo trata como medianoche de ese día, así que cualquier
-        # factura emitida después de las 00:00 del último día del rango
-        # quedaba excluida (el bug reportado con las facturas de combustible
-        # de fin de mes). Por eso el corte es "antes del día siguiente".
-        query = query.filter(CfdiDocument.fecha_emision < fecha_hasta + timedelta(days=1))
+    lista_meses = parsear_meses(meses)
+    if lista_meses:
+        query = query.filter(filtro_meses(CfdiDocument.fecha_emision, lista_meses))
+    else:
+        if fecha_desde:
+            query = query.filter(CfdiDocument.fecha_emision >= fecha_desde)
+        if fecha_hasta:
+            query = query.filter(CfdiDocument.fecha_emision < fecha_hasta + timedelta(days=1))
+    if grupo and grupo in GRUPOS_TIPO_COMPROBANTE:
+        query = query.filter(CfdiDocument.tipo_comprobante.in_(GRUPOS_TIPO_COMPROBANTE[grupo]))
     if complemento == "gasolinas":
         query = query.filter(CfdiDocument.tiene_complemento_combustible.is_(True))
     if q:
         like = f"%{q.strip()}%"
+        folio_completo = func.concat(func.coalesce(CfdiDocument.serie, ""), func.coalesce(CfdiDocument.folio, ""))
         query = query.filter(
             or_(
                 CfdiDocument.uuid.ilike(like),
@@ -417,9 +591,46 @@ def _query_cfdis_filtrados(
                 CfdiDocument.emisor_rfc.ilike(like),
                 CfdiDocument.receptor_nombre.ilike(like),
                 CfdiDocument.receptor_rfc.ilike(like),
+                CfdiDocument.folio.ilike(like),
+                folio_completo.ilike(f"%{q.strip().replace('-', '').replace(' ', '')}%"),
             )
         )
     return query
+
+
+# Columnas por las que se puede ordenar la bóveda (lista blanca: el nombre
+# viene del query string). "contraparte" depende de si se ven recibidas
+# (emisor) o emitidas (receptor).
+COLUMNAS_ORDENABLES = {
+    "fecha_emision", "uuid", "tipo_comprobante", "serie", "folio", "version", "lugar_expedicion",
+    "exportacion", "condiciones_pago", "subtotal", "descuento", "moneda", "tipo_cambio", "forma_pago",
+    "metodo_pago", "uso_cfdi", "regimen_fiscal_emisor", "regimen_fiscal_receptor",
+    "domicilio_fiscal_receptor", "total_impuestos_trasladados", "total_impuestos_retenidos",
+    "estado_sat", "emisor_rfc", "emisor_nombre", "receptor_rfc", "receptor_nombre",
+}
+
+
+def _orden_cfdis(orden: str | None, direccion: str | None, tipo: str | None):
+    desc = (direccion or "desc").lower() != "asc"
+    if orden == "total":
+        # Para un pago el importe real está en monto_pago (el total es $0).
+        columna = func.coalesce(CfdiDocument.monto_pago, CfdiDocument.total)
+    elif orden == "contraparte":
+        columna = CfdiDocument.receptor_nombre if tipo == "emitido" else CfdiDocument.emisor_nombre
+    elif orden == "rfc_contraparte":
+        columna = CfdiDocument.receptor_rfc if tipo == "emitido" else CfdiDocument.emisor_rfc
+    elif orden in COLUMNAS_ORDENABLES:
+        columna = getattr(CfdiDocument, orden)
+    else:
+        columna = CfdiDocument.fecha_emision
+    from sqlalchemy import String as _String
+
+    if isinstance(getattr(columna, "type", None), _String):
+        # Orden alfabético sin distinguir mayúsculas ("shannon" junto a "SHELL").
+        columna = func.lower(columna)
+    principal = columna.desc().nullslast() if desc else columna.asc().nullslast()
+    # Desempate estable para que la paginación no "salte" renglones.
+    return [principal, CfdiDocument.fecha_emision.desc(), CfdiDocument.id.desc()]
 
 
 def listar_cfdis(
@@ -429,23 +640,52 @@ def listar_cfdis(
     tipo: str | None = None,
     fecha_desde: date | None = None,
     fecha_hasta: date | None = None,
+    meses: str | None = None,
+    grupo: str | None = None,
     q: str | None = None,
     complemento: str | None = None,
+    orden: str | None = None,
+    direccion: str | None = None,
     skip: int = 0,
     limit: int = 100,
 ):
+    backfill_pagos_moneda(db, rfc_client_id)
     query = _query_cfdis_filtrados(
         db,
         rfc_client_id,
         tipo=tipo,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
+        meses=meses,
+        grupo=grupo,
         q=q,
         complemento=complemento,
     )
     total = query.count()
-    items = query.order_by(CfdiDocument.fecha_emision.desc()).offset(skip).limit(limit).all()
+    items = query.order_by(*_orden_cfdis(orden, direccion, tipo)).offset(skip).limit(limit).all()
     return items, total
+
+
+def conteos_por_grupo(
+    db: Session,
+    rfc_client_id: int,
+    *,
+    tipo: str | None = None,
+    meses: str | None = None,
+    q: str | None = None,
+    complemento: str | None = None,
+) -> dict[str, int]:
+    """Cuántos CFDIs caen en cada sub-pestaña (Facturas/Pagos/Nómina/
+    Traslados) con los demás filtros activos -- para los contadores de las
+    pestañas."""
+    base = _query_cfdis_filtrados(db, rfc_client_id, tipo=tipo, meses=meses, q=q, complemento=complemento)
+    filas = base.with_entities(CfdiDocument.tipo_comprobante, func.count(CfdiDocument.id)).group_by(
+        CfdiDocument.tipo_comprobante
+    )
+    por_tipo = {tc: n for tc, n in filas.all()}
+    resultado = {grupo: sum(por_tipo.get(tc, 0) for tc in tcs) for grupo, tcs in GRUPOS_TIPO_COMPROBANTE.items()}
+    resultado["todos"] = sum(por_tipo.values())
+    return resultado
 
 
 def contar_cfdis_totales(db: Session) -> int:
@@ -457,16 +697,8 @@ def _sumar_pagos_relacionados(db: Session, base, rfc_client_id: int) -> Decimal:
     """Suma el monto REAL de los pagos -- `imp_pagado` de cada DoctoRelacionado
     dentro del complemento de pago -- en vez del campo `total` del
     comprobante, que por especificación del SAT siempre viene en $0 para un
-    CFDI tipo Pago (P): el monto real vive dentro del complemento, no en el
-    encabezado. PagoRelacionado ya guarda esos montos (los usa la
-    conciliación de pagos); backfill_pagos_relacionados() se asegura de que
-    también estén rellenados para CFDIs de pago descargados antes de que
-    existiera esa tabla (es idempotente, seguro de llamar en cada request).
-
-    `base` es la MISMA query ya filtrada (rfc_client_id, rango de fechas,
-    búsqueda, complemento) que usa el resto de resumen_totales(), para que
-    esta suma respete exactamente los mismos filtros que las demás tarjetas
-    y la tabla de abajo."""
+    CFDI tipo Pago (P). `base` es la MISMA query ya filtrada que usa el resto
+    de resumen_totales()."""
     from app.conciliacion.models import PagoRelacionado
     from app.conciliacion.service import backfill_pagos_relacionados
 
@@ -488,19 +720,21 @@ def resumen_totales(
     tipo: str | None = None,
     fecha_desde: date | None = None,
     fecha_hasta: date | None = None,
+    meses: str | None = None,
+    grupo: str | None = None,
     q: str | None = None,
     complemento: str | None = None,
 ) -> dict:
-    """Cuenta e importe por tipo de comprobante y por método de pago. Recibe
-    los MISMOS filtros que listar_cfdis() para que la barra de Totales sobre
-    "Tus facturas descargadas" siempre sume lo que está filtrado/visible en
-    la tabla de abajo, no todo el historial del cliente."""
+    """Cuenta e importe por tipo de comprobante y por método de pago, con los
+    MISMOS filtros que listar_cfdis()."""
     base = _query_cfdis_filtrados(
         db,
         rfc_client_id,
         tipo=tipo,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
+        meses=meses,
+        grupo=grupo,
         q=q,
         complemento=complemento,
     )
@@ -514,17 +748,10 @@ def resumen_totales(
 
     ingresos_count, ingresos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "I")
     egresos_count, egresos_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "E")
-    # Traslados (T): el importe SIEMPRE es $0 por especificación del SAT (un
-    # CFDI de traslado documenta movimiento de mercancía, no una operación
-    # monetaria) -- $0.00 aquí es el valor correcto, no un dato faltante.
+    # Traslados (T): el importe SIEMPRE es $0 por especificación del SAT.
     traslados_count, traslados_total = contar_y_sumar(CfdiDocument.tipo_comprobante == "T")
-    # Pagos (P): igual que Traslados, el campo `total` del comprobante TAMBIÉN es
-    # siempre $0 por especificación del SAT (el monto real vive dentro del
-    # complemento de pago, no en el encabezado), así que sumar `total` aquí
-    # daba siempre $0 sin importar cuántos pagos hubiera -- lo que el
-    # contador reportó como "no se actualiza". El monto real sí se extrae y
-    # se guarda (en PagoRelacionado, para la conciliación de pagos); se
-    # reutiliza esa misma fuente aquí.
+    # Pagos (P): el `total` del encabezado también es $0; el monto real vive
+    # en el complemento (PagoRelacionado).
     pagos_count, _ = contar_y_sumar(CfdiDocument.tipo_comprobante == "P")
     pagos_total = _sumar_pagos_relacionados(db, base, rfc_client_id)
     ppd_count, ppd_total = contar_y_sumar(CfdiDocument.metodo_pago == "PPD")
@@ -552,13 +779,19 @@ def resumen_totales(
 def resumen_monedas(db: Session, rfc_client_id: int) -> tuple[int, list[tuple[str, int]]]:
     """Cuenta, para todas las facturas descargadas de un cliente (sin
     paginar), cuántas no están en MXN y el desglose por moneda. Alimenta el
-    banner de alerta de 'Tus facturas descargadas'."""
+    banner de alerta de 'Tus facturas descargadas'.
+
+    Antes de contar corrige los complementos de pago guardados con el "XXX"
+    del encabezado (ver backfill_pagos_moneda), y nunca cuenta códigos que
+    no son una moneda real (XXX de traslados, el typo XMN)."""
+    backfill_pagos_moneda(db, rfc_client_id)
     filas = (
         db.query(CfdiDocument.moneda, func.count(CfdiDocument.id))
         .filter(
             CfdiDocument.rfc_client_id == rfc_client_id,
             CfdiDocument.moneda.isnot(None),
             CfdiDocument.moneda != "MXN",
+            CfdiDocument.moneda.notin_(list(MONEDAS_NO_VALIDAS)),
         )
         .group_by(CfdiDocument.moneda)
         .all()
@@ -619,11 +852,19 @@ def get_cfdi_pdf(db: Session, rfc_client_id: int, cfdi_id: int) -> tuple[CfdiDoc
     compartir la factura sin tener que abrir el XML."""
     doc, xml_bytes = get_cfdi_xml(db, rfc_client_id, cfdi_id)
     conceptos = _conceptos_desde_xml(xml_bytes)
-    pdf_bytes = _renderizar_pdf_cfdi(doc, conceptos)
+    pagos: list[dict] = []
+    if doc.tipo_comprobante == "P":
+        from app.sat_downloads.detalle import extraer_detalle
+
+        try:
+            pagos = extraer_detalle(xml_bytes)["pagos"]
+        except Exception:  # noqa: BLE001
+            pagos = []
+    pdf_bytes = _renderizar_pdf_cfdi(doc, conceptos, pagos)
     return doc, pdf_bytes
 
 
-def _renderizar_pdf_cfdi(doc: CfdiDocument, conceptos: list[dict]) -> bytes:
+def _renderizar_pdf_cfdi(doc: CfdiDocument, conceptos: list[dict], pagos: list[dict] | None = None) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.units import mm
@@ -746,6 +987,42 @@ def _renderizar_pdf_cfdi(doc: CfdiDocument, conceptos: list[dict]) -> bytes:
         elementos.append(Paragraph("No fue posible leer los conceptos del XML.", subtitulo))
     elementos.append(Spacer(1, 6 * mm))
 
+    if pagos:
+        elementos.append(Paragraph("Complemento de pago -- documentos relacionados", etiqueta))
+        elementos.append(Spacer(1, 2 * mm))
+        filas_pagos = [["Fecha pago", "Forma", "Factura (UUID)", "Parc.", "Saldo ant.", "Pagado", "Insoluto"]]
+        for pg in pagos:
+            filas_pagos.append(
+                [
+                    (pg.get("fecha_pago") or "")[:10],
+                    (pg.get("forma_pago") or "")[:2],
+                    Paragraph((pg.get("id_documento") or "—"), valor_style),
+                    pg.get("num_parcialidad") or "",
+                    money(_to_decimal(pg.get("imp_saldo_ant"))),
+                    money(_to_decimal(pg.get("imp_pagado"))),
+                    money(_to_decimal(pg.get("imp_saldo_insoluto"))),
+                ]
+            )
+        tabla_pagos = Table(
+            filas_pagos,
+            colWidths=[20 * mm, 12 * mm, 58 * mm, 10 * mm, 24 * mm, 24 * mm, 24 * mm],
+            repeatRows=1,
+        )
+        tabla_pagos.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F5FAFF")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#64748B")),
+                    ("FONTSIZE", (0, 0), (-1, -1), 7),
+                    ("ALIGN", (4, 0), (-1, -1), "RIGHT"),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LINEBELOW", (0, 0), (-1, -2), 0.4, colors.HexColor("#E2E8F0")),
+                ]
+            )
+        )
+        elementos.append(tabla_pagos)
+        elementos.append(Spacer(1, 6 * mm))
+
     totales_filas = [["Subtotal", money(doc.subtotal)]]
     if doc.descuento:
         totales_filas.append(["Descuento", money(doc.descuento)])
@@ -753,7 +1030,10 @@ def _renderizar_pdf_cfdi(doc: CfdiDocument, conceptos: list[dict]) -> bytes:
         totales_filas.append(["Impuestos trasladados", money(doc.total_impuestos_trasladados)])
     if doc.total_impuestos_retenidos:
         totales_filas.append(["Impuestos retenidos", money(doc.total_impuestos_retenidos)])
-    totales_filas.append(["Total", money(doc.total)])
+    if doc.tipo_comprobante == "P" and doc.monto_pago is not None:
+        totales_filas.append(["Monto pagado", money(doc.monto_pago)])
+    else:
+        totales_filas.append(["Total", money(doc.total)])
 
     tabla_totales = Table(totales_filas, colWidths=[40 * mm, 40 * mm], hAlign="RIGHT")
     tabla_totales.setStyle(

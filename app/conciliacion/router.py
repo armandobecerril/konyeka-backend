@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.conciliacion import service
 from app.conciliacion.schemas import (
+    DetallePagosFacturaOut,
     FacturaConciliacionOut,
     GenerarSugerenciasOut,
     PagoHuerfanoOut,
@@ -44,6 +45,21 @@ def facturas(
 ):
     get_client(db, rfc_client_id)
     return service.listar_facturas(db, rfc_client_id, estado=estado, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
+
+
+@router.get(
+    "/clientes/{rfc_client_id}/conciliacion/facturas/{factura_id}/pagos",
+    response_model=DetallePagosFacturaOut,
+)
+def pagos_de_factura(
+    rfc_client_id: int,
+    factura_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Trazabilidad: complementos (REP) y movimientos bancarios aplicados a una factura PPD."""
+    get_client(db, rfc_client_id)
+    return service.detalle_pagos_factura(db, rfc_client_id, factura_id)
 
 
 @router.get("/clientes/{rfc_client_id}/conciliacion/huerfanos", response_model=list[PagoHuerfanoOut])
