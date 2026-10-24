@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.accounts.router import router as accounts_router
+from app.bancos.router import router as bancos_router
+from app.combustibles.router import router as combustibles_router
 from app.conciliacion.router import router as conciliacion_router
 from app.core.config import settings
 from app.efirma.router import router as efirma_router
@@ -38,6 +40,8 @@ app.include_router(efirma_router)
 app.include_router(sat_downloads_router)
 app.include_router(sat_documentos_router)
 app.include_router(conciliacion_router)
+app.include_router(bancos_router)
+app.include_router(combustibles_router)
 app.include_router(sat_portal_router)
 
 

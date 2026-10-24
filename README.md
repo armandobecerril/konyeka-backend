@@ -79,3 +79,30 @@ alembic downgrade -1                # revertir la última
   Server (mismo patrón que Unidad Radar); el backend se desplegará como su
   propio servicio (Azure Container Apps o App Service) — pendiente de
   configurar cuando pasemos a la fase de despliegue.
+
+## Revisión con contadores del 23-oct-2026 (rama `feature/informe-23oct`)
+
+Backlog completo: `../REU_23OCT26/BACKLOG_KONYEKA_23OCT26.md`.
+
+```bash
+alembic upgrade head                      # 0008 monto_pago/moneda de pagos, 0009 bancos
+pip install -r requirements.txt           # agrega openpyxl (estados de cuenta .xlsx)
+python -m scripts.backfill_combustibles   # marca facturas directas de gasolinera (151015xx)
+python -m pytest tests                    # parsers, motor de cruce, moneda de pagos
+```
+
+| Método | Ruta | Qué hace |
+| --- | --- | --- |
+| GET | `/clientes/{id}/cfdis?meses=2026-08,2026-09&grupo=pagos&orden=total&dir=asc` | Meses acumulables, sub-pestaña (facturas/pagos/nomina/traslados) y orden por cualquier columna |
+| GET | `/clientes/{id}/cfdis/conteos` | Contadores de las sub-pestañas |
+| GET | `/clientes/{id}/cfdis/{cfdi}/detalle` | Conceptos, impuestos, pagos, relacionados, nómina y combustible (leído del XML) |
+| GET | `/clientes/{id}/conciliacion/facturas/{factura}/pagos` | REPs y movimientos bancarios aplicados a una factura PPD |
+| GET | `/clientes/{id}/combustibles/reporte` · `/export?formato=detalle_csv\|diot_csv\|diot_txt` | Combustibles por estación (insumo DIOT) |
+| GET/POST | `/clientes/{id}/bancos/cuentas` | Cuentas bancarias del cliente |
+| POST | `/clientes/{id}/bancos/estados` (multipart: cuenta_id, periodo, archivo) | Carga CSV/XLSX/PDF del mes y concilia |
+| POST | `/clientes/{id}/bancos/conciliar?meses=` | Re-corre el motor de cruce |
+| GET | `/clientes/{id}/bancos/movimientos` · `/resumen` · `/export` | Revisión, deducibilidad y CSV |
+| GET/POST/PUT | `/bancos/movimientos/{m}/candidatos` · `/vincular` · `/clasificacion` · `/bancos/vinculos/{v}/{aprobar\|rechazar\|desvincular}` | Revisión manual |
+
+La moneda de los CFDI tipo **P** ahora sale de `MonedaP`/`MonedaDR` (el encabezado siempre
+trae `XXX`); los registros viejos se corrigen solos al abrir la bóveda (`backfill_pagos_moneda`).

@@ -84,6 +84,10 @@ class CfdiDocument(Base):
 
     fecha_emision: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    # Solo para CFDI tipo Pago (P): el `Total` del encabezado siempre es $0 por
+    # especificación del SAT; el importe real es la suma de `Monto` de cada
+    # <Pago> del complemento (o `Totales/MontoTotalPagos` en Pagos 2.0).
+    monto_pago: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     subtotal: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     moneda: Mapped[str | None] = mapped_column(String(10), nullable=True)
     metodo_pago: Mapped[str | None] = mapped_column(String(10), nullable=True)

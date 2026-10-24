@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -12,6 +12,7 @@ from app.sat_downloads.schemas import (
     CfdisResumenOut,
     ColumnasPreferenciaIn,
     ColumnasPreferenciaOut,
+    ConteosGrupoOut,
     MonedaConteo,
     ResumenMonedasOut,
     ResumenTotalesOut,
@@ -100,7 +101,9 @@ def resumen_totales_cliente(
     tipo: str | None = Query(default=None, description="'emitido' o 'recibido'"),
     fecha_desde: date | None = Query(default=None),
     fecha_hasta: date | None = Query(default=None),
-    q: str | None = Query(default=None, description="Busca por UUID, RFC o nombre"),
+    meses: str | None = Query(default=None, description="Meses acumulables: '2026-08,2026-09'"),
+    grupo: str | None = Query(default=None, description="facturas | pagos | nomina | traslados"),
+    q: str | None = Query(default=None, description="Busca por UUID, RFC, nombre o serie/folio"),
     complemento: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -116,9 +119,28 @@ def resumen_totales_cliente(
             tipo=tipo,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            meses=meses,
+            grupo=grupo,
             q=q,
             complemento=complemento,
         )
+    )
+
+
+@router.get("/clientes/{rfc_client_id}/cfdis/conteos", response_model=ConteosGrupoOut)
+def conteos_cliente(
+    rfc_client_id: int,
+    tipo: str | None = Query(default=None),
+    meses: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    complemento: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cuántos CFDIs hay en cada sub-pestaña (Facturas/Pagos/Nómina/Traslados)."""
+    get_client(db, rfc_client_id)
+    return ConteosGrupoOut(
+        **service.conteos_por_grupo(db, rfc_client_id, tipo=tipo, meses=meses, q=q, complemento=complemento)
     )
 
 
@@ -132,6 +154,10 @@ def listar_cfdis(
     complemento: str | None = Query(
         default=None, description="Filtra por complemento SAT. Por ahora solo 'gasolinas'."
     ),
+    meses: str | None = Query(default=None, description="Meses acumulables: '2026-08,2026-09'"),
+    grupo: str | None = Query(default=None, description="facturas | pagos | nomina | traslados"),
+    orden: str | None = Query(default=None, description="Columna por la que se ordena"),
+    dir: str | None = Query(default="desc", description="asc | desc"),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -145,10 +171,34 @@ def listar_cfdis(
         fecha_hasta=fecha_hasta,
         q=q,
         complemento=complemento,
+        meses=meses,
+        grupo=grupo,
+        orden=orden,
+        direccion=dir,
         skip=skip,
         limit=limit,
     )
     return CfdiListOut(items=items, total=total)
+
+
+@router.get("/clientes/{rfc_client_id}/cfdis/{cfdi_id}/detalle")
+def detalle_cfdi(
+    rfc_client_id: int,
+    cfdi_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Conceptos, impuestos, pagos (documentos relacionados), CFDI
+    relacionados, nómina y combustible, leídos del XML bajo demanda -- el
+    panel inferior de la bóveda (como el de MiAdmin)."""
+    from app.sat_downloads.detalle import extraer_detalle
+
+    doc, content = service.get_cfdi_xml(db, rfc_client_id, cfdi_id)
+    try:
+        detalle = extraer_detalle(content)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"No se pudo leer el XML: {exc}") from exc
+    return {"id": doc.id, "uuid": doc.uuid, "tipo_comprobante": doc.tipo_comprobante, **detalle}
 
 
 @router.get("/clientes/{rfc_client_id}/cfdis/{cfdi_id}/xml")
