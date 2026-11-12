@@ -314,6 +314,95 @@ def _generar_y_descargar_pdf(page: Page, texto_boton_generar: str) -> bytes:
     )
 
 
+def _pdf_opinion_desde_iframe(page: Page, timeout_ms: int = 60000) -> bytes | None:
+    """Verificado contra el portal real (diagnóstico del 24-oct-2026): ya
+    autenticado, el SPA de Opinión NO tiene botón "Generar Opinión" -- genera
+    el reporte solo y lo incrusta en un <iframe title="pdfReporteOpinion">
+    con src="data:application/pdf;base64,...". Se espera a que aparezca (el
+    SPA muestra un spinner mientras consulta) y se decodifica el base64."""
+    import base64
+
+    selector = "iframe[title='pdfReporteOpinion'], iframe[src^='data:application/pdf']"
+    try:
+        page.wait_for_selector(selector, state="attached", timeout=timeout_ms)
+    except Exception:  # noqa: BLE001
+        return None
+    src = page.locator(selector).first.get_attribute("src") or ""
+    marcador = "base64,"
+    if marcador not in src:
+        return None
+    return base64.b64decode(src.split(marcador, 1)[1])
+
+
+def _constancia_desde_iframe(page: Page, timeout_ms: int = 30000) -> bytes:
+    """Verificado contra el portal real (11-nov-2026): tras el login la página
+    es el Buzón Tributario con un <iframe id="iframetoload"> que carga
+    ConsultaTramite.jsf ("Reimpresión de Acuses"), y ahí está el botón
+    "Generar Constancia". Se escucha CUALQUIER respuesta PDF del contexto
+    (de cualquier frame o pestaña), además de descargas y pestañas nuevas;
+    si nada llega, se pide IdcGeneraConstancia.jsf con la sesión ya abierta."""
+    from app.sat_documentos.portal_http import URL_CONSTANCIA_PDF, es_pdf
+
+    contexto = page.context
+    respuestas_pdf: list = []
+    descargas: list = []
+    pestanas: list = []
+    contexto.on(
+        "response",
+        lambda r: respuestas_pdf.append(r) if "pdf" in (r.headers.get("content-type") or "").lower() else None,
+    )
+    contexto.on("download", lambda d: descargas.append(d))
+    contexto.on("page", lambda p: pestanas.append(p))
+
+    # Espera a que el iframe termine de cargar el formulario.
+    boton = None
+    limite = timeout_ms
+    while limite > 0:
+        boton = _buscar_en_cualquier_frame(page, "Generar Constancia")
+        if boton.count() > 0:
+            break
+        page.wait_for_timeout(1000)
+        limite -= 1000
+    if boton is None or boton.count() == 0:
+        raise RuntimeError("No apareció el botón 'Generar Constancia' dentro del iframe del SAT.")
+    boton.first.click()
+
+    esperado = 0
+    while esperado < timeout_ms:
+        page.wait_for_timeout(1000)
+        esperado += 1000
+        for r in list(respuestas_pdf):
+            try:
+                cuerpo = r.body()
+            except Exception:  # noqa: BLE001
+                continue
+            if es_pdf(cuerpo):
+                return cuerpo
+        for d in list(descargas):
+            ruta = d.path()
+            if ruta and es_pdf(Path(ruta).read_bytes()):
+                return Path(ruta).read_bytes()
+        for p in list(pestanas):
+            if p.url.startswith("http"):
+                try:
+                    r = contexto.request.get(p.url)
+                    if es_pdf(r.body()):
+                        return r.body()
+                except Exception:  # noqa: BLE001
+                    pass
+        if esperado >= 8000 and not respuestas_pdf and not descargas and not pestanas:
+            break  # el botón no disparó nada visible; se intenta la URL directa
+
+    r = contexto.request.get(URL_CONSTANCIA_PDF, headers={"Referer": "https://rfcampc.siat.sat.gob.mx/PTSC/IdcSiat/autc/ReimpresionTramite/ConsultaTramite.jsf"})
+    if r.ok and es_pdf(r.body()):
+        return r.body()
+    raise RuntimeError(
+        "Se hizo clic en 'Generar Constancia' pero no llegó ningún PDF "
+        f"(respuestas PDF: {len(respuestas_pdf)}, descargas: {len(descargas)}, pestañas nuevas: {len(pestanas)}; "
+        f"IdcGeneraConstancia.jsf respondió {r.status} {r.headers.get('content-type')})."
+    )
+
+
 def _guardar_diagnostico(page: Page, consola_log: list[str], *, rfc: str, tipo: str) -> str:
     """Si un paso posterior al login (todavía marcado # TODO-VERIFICAR) truena, guarda
     un screenshot de la página completa en el momento exacto del error -- así la
@@ -401,19 +490,19 @@ def descargar_opinion_cumplimiento(
             # PDF; si el resultado positivo/negativo solo aparece en una pestaña
             # nueva, esta lectura de `contenido` en la pestaña original puede
             # necesitar ajustarse después de ver el próximo diagnóstico.
-            pdf_bytes = _generar_y_descargar_pdf(page, "Generar Opinión")  # TODO-VERIFICAR
+            pdf_bytes = _pdf_opinion_desde_iframe(page)
+            if pdf_bytes is None:
+                # Por si el SAT vuelve a poner un botón para generarla.
+                pdf_bytes = _generar_y_descargar_pdf(page, "Generar Opinión")
 
-            contenido = page.inner_text("body").lower()
-            if "positivo" in contenido:
-                resultado = "positivo"
-            elif "negativo" in contenido:
-                resultado = "negativo"
-            else:
+            from app.sat_documentos.portal_http import sentido_opinion
+
+            resultado = sentido_opinion(pdf_bytes)
+            if resultado is None:
                 raise SatPortalError(
-                    "Se generó la opinión pero no se pudo determinar si es positiva o "
-                    "negativa en la respuesta del SAT; revísala manualmente en el portal."
+                    "Se descargó la opinión pero no se pudo leer su sentido (positivo/negativo) "
+                    "en el PDF; revísala manualmente."
                 )
-
             return pdf_bytes, resultado
         except SatPortalError:
             raise
@@ -455,7 +544,7 @@ def descargar_constancia_situacion_fiscal(
             # A partir de aquí `page` ya quedó en la pantalla del trámite
             # tras el login, no se vuelve a navegar a URL_CONSTANCIA. Lo
             # siguiente sigue sin verificar contra el portal real.
-            return _generar_y_descargar_pdf(page, "Generar Constancia")  # TODO-VERIFICAR
+            return _constancia_desde_iframe(page)
         except SatPortalError:
             raise
         except Exception as exc:

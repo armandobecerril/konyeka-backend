@@ -22,7 +22,8 @@ class DocumentoSat(Base):
     # estado: solicitado -> en_proceso -> terminado | error
 
     resultado: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    # resultado: "positivo" | "negativo" -- solo aplica a TIPO_OPINION_CUMPLIMIENTO
+    # resultado (solo Opinión): "positivo" | "negativo" | "en_suspenso" |
+    # "no_inscrito" | "sin_obligaciones" -- el "Sentido" leído del PDF
 
     mensaje_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     storage_path: Mapped[str | None] = mapped_column(String(500), nullable=True)

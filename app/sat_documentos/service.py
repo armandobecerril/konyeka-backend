@@ -164,15 +164,11 @@ def _procesar_documento(documento_id: int) -> None:
         rfc = rfc_client.rfc if rfc_client else str(documento.rfc_client_id)
 
         try:
+            pdf_bytes, resultado = _descargar(
+                db, documento, rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
+            )
             if documento.tipo == TIPO_OPINION_CUMPLIMIENTO:
-                pdf_bytes, resultado = descargar_opinion_cumplimiento(
-                    rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
-                )
                 documento.resultado = resultado
-            else:
-                pdf_bytes = descargar_constancia_situacion_fiscal(
-                    rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password
-                )
 
             storage = get_xml_storage()
             documento.storage_path = storage.save_pdf(
@@ -181,7 +177,7 @@ def _procesar_documento(documento_id: int) -> None:
             documento.estado = "terminado"
         except SatPortalError as exc:
             documento.estado = "error"
-            documento.mensaje_error = str(exc)
+            documento.mensaje_error = _recortar(str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Error inesperado al descargar %s para rfc_client_id=%s", documento.tipo, documento.rfc_client_id)
             documento.estado = "error"
@@ -195,7 +191,7 @@ def _procesar_documento(documento_id: int) -> None:
             # contenedor cada vez.
             detalle = f"{type(exc).__name__}: {str(exc)}".strip()
             detalle = detalle[:300] + "…" if len(detalle) > 300 else detalle
-            documento.mensaje_error = (
+            documento.mensaje_error = _recortar(
                 f"Ocurrió un error inesperado al conectar con el portal del SAT. Intenta de nuevo. "
                 f"Detalle técnico: {detalle}"
             )
@@ -204,3 +200,47 @@ def _procesar_documento(documento_id: int) -> None:
         db.commit()
     finally:
         db.close()
+
+
+def _recortar(texto: str, limite: int = 500) -> str:
+    """mensaje_error es VARCHAR(500): un mensaje más largo tumbaba el commit
+    y dejaba el registro "en_proceso" para siempre."""
+    return texto if len(texto) <= limite else texto[: limite - 1] + "…"
+
+
+def _descargar(db: Session, documento: DocumentoSat, *, rfc: str, cer_bytes: bytes, key_bytes: bytes, password: str):
+    """Método principal: HTTP directo con login por e.firma (portal_http.py,
+    sin navegador ni CAPTCHA). Si falla -- el SAT cambia un formulario, está
+    lento, etc. -- y SAT_DOCUMENTOS_RPA_RESPALDO está activo, se intenta con
+    el navegador headless (rpa.py). Regresa (pdf_bytes, resultado)."""
+    from app.core.config import settings
+    from app.sat_documentos import portal_http
+
+    signer = obtener_signer(db, documento.rfc_client_id)
+    try:
+        if documento.tipo == TIPO_OPINION_CUMPLIMIENTO:
+            return portal_http.descargar_opinion(signer, rfc=rfc)
+        return portal_http.descargar_constancia(signer, rfc=rfc), None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Descarga HTTP de %s falló para %s (%s: %s); %s",
+            documento.tipo,
+            rfc,
+            type(exc).__name__,
+            str(exc)[:200],
+            "se intenta con el navegador" if settings.SAT_DOCUMENTOS_RPA_RESPALDO else "sin respaldo",
+        )
+        if not settings.SAT_DOCUMENTOS_RPA_RESPALDO:
+            raise SatPortalError(
+                f"No se pudo descargar del SAT con la e.firma ({type(exc).__name__}: {str(exc)[:200]})."
+            ) from exc
+        error_http = f"{type(exc).__name__}: {str(exc)[:150]}"
+
+    try:
+        if documento.tipo == TIPO_OPINION_CUMPLIMIENTO:
+            return descargar_opinion_cumplimiento(rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password)
+        pdf = descargar_constancia_situacion_fiscal(rfc=rfc, cer_bytes=cer_bytes, key_bytes=key_bytes, password=password)
+        portal_http.validar_pdf(pdf, rfc=rfc, tipo="constancia")
+        return pdf, None
+    except SatPortalError as exc:
+        raise SatPortalError(f"{exc} (El método directo también falló: {error_http})") from exc

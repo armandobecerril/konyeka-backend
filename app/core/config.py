@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # trámites, a diferencia de la Descarga Masiva de CFDIs.
     # SAT_RPA_HEADLESS=false sirve para ver el navegador y ajustar selectores en desarrollo.
     SAT_RPA_HEADLESS: bool = True
+    # Opinión/Constancia se descargan primero por HTTP con la e.firma
+    # (app/sat_documentos/portal_http.py). Si eso falla y esto es True, se
+    # reintenta con el navegador headless (rpa.py).
+    SAT_DOCUMENTOS_RPA_RESPALDO: bool = True
     # Resolución del CAPTCHA del login del portal del SAT -- OPCIONAL: el
     # login confirmado es con e.firma, y entrando así el SAT ya no lo pide
     # (lo confirmó el contador en el portal real), así que en el caso normal
