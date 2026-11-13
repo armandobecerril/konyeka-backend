@@ -59,6 +59,49 @@ class Settings(BaseSettings):
     AZURE_LLM_DEPLOYMENT: str = ""
     AZURE_LLM_API_VERSION: str = "2024-06-01"
 
+    # --- Licencias, pagos y portal de superadmin ---------------------------
+    # development | production. En production se exige Stripe real y se
+    # apaga el acceso de desarrollo al portal de superadmin.
+    APP_ENV: str = "development"
+    # URL pública del frontend (para los enlaces de correos y el regreso de Stripe).
+    APP_BASE_URL: str = "http://localhost:3000"
+
+    # mock (pasarela simulada, sin tarjetas) | stripe_test | stripe_live
+    PAYMENTS_MODE: str = "mock"
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    # Días de la prueba gratis al registrarse.
+    PRUEBA_DIAS: int = 14
+
+    # Microsoft Entra ID (tenant de ISC) para el portal de superadmin.
+    ENTRA_TENANT_ID: str = ""
+    ENTRA_CLIENT_ID: str = ""
+    ENTRA_APP_ROLE: str = "KONYEKA.SuperAdmin"
+    ENTRA_ADMIN_GROUP_ID: str = ""
+    # Correos permitidos (además del rol y MFA), separados por coma.
+    ADMIN_ALLOWLIST: str = ""
+    # Solo desarrollo: entrar al portal sin Microsoft (nunca en production).
+    ADMIN_DEV_LOGIN: bool = False
+
+    # Correo saliente (Azure Communication Services). Sin esto, los correos
+    # quedan en la bandeja del portal de superadmin.
+    ACS_CONNECTION_STRING: str = ""
+    ACS_SENDER: str = "DoNotReply@konyeka.mx"
+
+    # Supuestos FinOps para el tablero de Finanzas (validar contra Azure/Stripe).
+    FINOPS_FIJO_MENSUAL_CENTAVOS: int = 250000  # nube + observabilidad, $2,500 MXN/mes
+    FINOPS_STRIPE_PCT: float = 0.036
+    FINOPS_STRIPE_FIJO_CENTAVOS: int = 300
+    FINOPS_IVA_COMISION: float = 0.16
+
+    @property
+    def es_produccion(self) -> bool:
+        return self.APP_ENV.lower() == "production"
+
+    @property
+    def admin_allowlist(self) -> list[str]:
+        return [e.strip().lower() for e in self.ADMIN_ALLOWLIST.split(",") if e.strip()]
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

@@ -688,9 +688,19 @@ def conteos_por_grupo(
     return resultado
 
 
-def contar_cfdis_totales(db: Session) -> int:
-    """Total de CFDIs descargados en la bóveda, sumando todos los clientes."""
-    return db.query(func.count(CfdiDocument.id)).scalar() or 0
+def contar_cfdis_totales(db: Session, despacho_id: int | None) -> int:
+    """Total de CFDIs descargados en la bóveda del despacho, sumando sus clientes."""
+    if despacho_id is None:
+        return 0
+    from app.rfc_clients.models import RfcClient
+
+    return (
+        db.query(func.count(CfdiDocument.id))
+        .join(RfcClient, RfcClient.id == CfdiDocument.rfc_client_id)
+        .filter(RfcClient.despacho_id == despacho_id)
+        .scalar()
+        or 0
+    )
 
 
 def _sumar_pagos_relacionados(db: Session, base, rfc_client_id: int) -> Decimal:

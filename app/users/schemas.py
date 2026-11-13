@@ -9,3 +9,5 @@ class UserOut(BaseModel):
     nombre: str
     rol: str
     activo: bool
+    despacho_id: int | None = None
+    rol_despacho: str | None = None

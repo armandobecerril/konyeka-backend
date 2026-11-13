@@ -1,0 +1,10 @@
+[
+  {
+    "allowedMemberTypes": ["User"],
+    "description": "Acceso al portal de superadmin de KONYEKA (finanzas, embudo, cupones, despachos y licencias).",
+    "displayName": "KONYEKA SuperAdmin",
+    "id": "6f1d2b9e-3c0a-4e8b-9f3a-7c5d1e2a4b60",
+    "isEnabled": true,
+    "value": "KONYEKA.SuperAdmin"
+  }
+]

@@ -1,7 +1,7 @@
 """Modelo de usuarios de la aplicación (login a KONYEKA)."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -16,6 +16,11 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     rol: Mapped[str] = mapped_column(String(50), nullable=False, default="admin")
     activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Despacho al que pertenece (ve sus clientes y bóveda) y su papel en él:
+    # dueno (paga y aprueba accesos) | admin (aprueba accesos) | miembro.
+    despacho_id: Mapped[int | None] = mapped_column(ForeignKey("despachos.id"), nullable=True, index=True)
+    rol_despacho: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    telefono: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

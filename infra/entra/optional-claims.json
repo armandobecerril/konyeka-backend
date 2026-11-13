@@ -1,0 +1,8 @@
+{
+  "idToken": [
+    { "name": "amr", "essential": false },
+    { "name": "email", "essential": false }
+  ],
+  "accessToken": [],
+  "saml2Token": []
+}

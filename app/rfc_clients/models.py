@@ -1,7 +1,7 @@
 """Catálogo de clientes (RFCs administrados por el despacho)."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -9,9 +9,12 @@ from app.core.db import Base
 
 class RfcClient(Base):
     __tablename__ = "rfc_clients"
+    # El mismo RFC puede ser cliente de dos despachos distintos.
+    __table_args__ = (UniqueConstraint("despacho_id", "rfc", name="uq_rfc_clients_despacho_rfc"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    rfc: Mapped[str] = mapped_column(String(13), unique=True, index=True, nullable=False)
+    despacho_id: Mapped[int] = mapped_column(ForeignKey("despachos.id"), nullable=False, index=True)
+    rfc: Mapped[str] = mapped_column(String(13), index=True, nullable=False)
     razon_social: Mapped[str] = mapped_column(String(255), nullable=False)
     tipo_persona: Mapped[str] = mapped_column(String(10), nullable=False)  # "fisica" | "moral"
     regimen_fiscal: Mapped[str | None] = mapped_column(String(120), nullable=True)

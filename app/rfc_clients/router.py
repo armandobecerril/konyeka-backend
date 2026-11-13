@@ -17,6 +17,12 @@ from app.users.models import User
 router = APIRouter(prefix="/clientes", tags=["Catálogo de Clientes"])
 
 
+def _despacho(user: User) -> int:
+    if user.despacho_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tu usuario todavía no pertenece a un despacho.")
+    return user.despacho_id
+
+
 @router.get("", response_model=list[RfcClientOut])
 def listar(
     q: str | None = Query(default=None, description="Busca por RFC o razón social"),
@@ -26,7 +32,7 @@ def listar(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return service.list_clients(db, q=q, solo_activos=solo_activos, skip=skip, limit=limit)
+    return service.list_clients(db, despacho_id=_despacho(current_user), q=q, solo_activos=solo_activos, skip=skip, limit=limit)
 
 
 @router.post("", response_model=RfcClientOut, status_code=201)
@@ -35,7 +41,7 @@ def crear(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return service.create_client(db, payload, created_by_id=current_user.id)
+    return service.create_client(db, payload, created_by_id=current_user.id, despacho_id=_despacho(current_user))
 
 
 @router.get("/resumen", response_model=ClientesResumenOut)
@@ -43,7 +49,7 @@ def resumen(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return ClientesResumenOut(total_activos=service.contar_clientes_activos(db))
+    return ClientesResumenOut(total_activos=service.contar_clientes_activos(db, _despacho(current_user)))
 
 
 @router.post("/leer-constancia", response_model=ConstanciaExtraidaOut)

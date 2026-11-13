@@ -75,7 +75,7 @@ def resumen_cfdis_global(
 ):
     """Total de XMLs descargados en la bóveda, sumando todos los clientes.
     Alimenta la tarjeta 'XML descargados' del dashboard de inicio."""
-    return CfdisResumenOut(total_xml=service.contar_cfdis_totales(db))
+    return CfdisResumenOut(total_xml=service.contar_cfdis_totales(db, current_user.despacho_id))
 
 
 @router.get("/clientes/{rfc_client_id}/cfdis/resumen-monedas", response_model=ResumenMonedasOut)

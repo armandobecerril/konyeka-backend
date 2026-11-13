@@ -14,6 +14,13 @@ from app.efirma import models as efirma_models  # noqa: E402,F401
 from app.rfc_clients import models as rfc_clients_models  # noqa: E402,F401
 from app.sat_downloads import models as sat_downloads_models  # noqa: E402,F401
 from app.users import models as users_models  # noqa: E402,F401
+from app.despachos import models as despachos_models  # noqa: E402,F401
+from app.billing import models as billing_models  # noqa: E402,F401
+from app.cupones import models as cupones_models  # noqa: E402,F401
+from app.embudo import models as embudo_models  # noqa: E402,F401
+from app.notificaciones import models as notificaciones_models  # noqa: E402,F401
+from app.admin import models as admin_models  # noqa: E402,F401
+from app.sat_documentos import models as sat_documentos_models  # noqa: E402,F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
